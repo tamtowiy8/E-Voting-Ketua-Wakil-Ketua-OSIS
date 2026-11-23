@@ -1,0 +1,8 @@
+{
+  "name": "E-Voting OSIS — Sistem Pemilihan Ketua & Wakil Ketua OSIS",
+  "description": "Sistem pemungutan suara elektronik (E-Voting) OSIS lengkap dengan Portal Pemilih, Panel Admin berbasis peran (Admin & SuperAdmin), dan Live Monitor Quick Count realtime.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,626 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated organizer profile for Google Sheets and Firestore cloud sync.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID matching document ID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified Google account email address."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Display name of the organizer."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["operator", "admin"],
+          "maxLength": 20,
+          "description": "Organizer role inside cloud workspace."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server last-update timestamp."
+        }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Authorized Firestore administrator registry record.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the administrator."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160,
+          "description": "Verified administrator email."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Full name of the administrator."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": ["uid", "email", "displayName", "createdAt"]
+    },
+    "SheetLink": {
+      "title": "SheetLink",
+      "description": "Linked Google Sheets spreadsheet metadata saved by an organizer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Link document ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "spreadsheetId": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Google Spreadsheet ID."
+        },
+        "spreadsheetTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Google Spreadsheet title."
+        },
+        "sheetName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Selected worksheet tab name."
+        },
+        "purpose": {
+          "type": "string",
+          "enum": ["dpt_import", "results_export", "both"],
+          "maxLength": 30,
+          "description": "Usage purpose for the linked spreadsheet."
+        },
+        "spreadsheetUrl": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 300,
+          "description": "Direct URL to open the spreadsheet in Google Sheets."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "spreadsheetId",
+        "spreadsheetTitle",
+        "sheetName",
+        "purpose",
+        "spreadsheetUrl",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ElectionWorkspace": {
+      "title": "ElectionWorkspace",
+      "description": "Cloud-synced OSIS election summary and configuration document.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Election workspace ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "schoolName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "School name."
+        },
+        "academicYear": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Academic year."
+        },
+        "electionTitle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Election title."
+        },
+        "isBoothOpen": {
+          "type": "boolean",
+          "description": "Whether voting booth is open."
+        },
+        "hideLiveResults": {
+          "type": "boolean",
+          "description": "Whether live monitor hides counts."
+        },
+        "totalDpt": {
+          "type": "integer",
+          "description": "Total registered voters."
+        },
+        "totalVoted": {
+          "type": "integer",
+          "description": "Total voters who cast ballots."
+        },
+        "totalValidVotes": {
+          "type": "integer",
+          "description": "Total valid votes tallied."
+        },
+        "startTime": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Scheduled voting start timestamp."
+        },
+        "endTime": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Scheduled voting end timestamp."
+        },
+        "logoUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 250000,
+          "description": "School or OSIS logo path or bounded PNG data URI."
+        },
+        "themePresetId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Selected app theme preset ID."
+        },
+        "themePrimaryColor": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 20,
+          "description": "Primary hex color."
+        },
+        "themeSecondaryColor": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 20,
+          "description": "Secondary hex color."
+        },
+        "themeAccentColor": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 20,
+          "description": "Accent hex color."
+        },
+        "themeSurfaceMode": {
+          "type": "string",
+          "enum": ["light", "warm", "cool"],
+          "maxLength": 20,
+          "description": "Surface theme mode."
+        },
+        "voterLoginMode": {
+          "type": "string",
+          "enum": ["NISN", "QR_CODE", "BOTH"],
+          "maxLength": 20,
+          "description": "Active voter authentication mode (NISN, QR_CODE, or BOTH)."
+        },
+        "candidateVotes": {
+          "type": "object",
+          "description": "Map of candidate ID to current vote count for 1-document real-time quick count."
+        },
+        "gradeTotals": {
+          "type": "object",
+          "description": "Map of grade level (X, XI, XII) to total registered voters."
+        },
+        "gradeVoted": {
+          "type": "object",
+          "description": "Map of grade level (X, XI, XII) to total voters who have voted."
+        },
+        "clientUpdatedAt": {
+          "type": "integer",
+          "description": "Epoch milliseconds of last election database mutation."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "active", "closed"],
+          "maxLength": 20,
+          "description": "Lifecycle status of the election workspace."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "schoolName",
+        "academicYear",
+        "electionTitle",
+        "isBoothOpen",
+        "hideLiveResults",
+        "totalDpt",
+        "totalVoted",
+        "totalValidVotes",
+        "startTime",
+        "endTime",
+        "logoUrl",
+        "themePresetId",
+        "themePrimaryColor",
+        "themeSecondaryColor",
+        "themeAccentColor",
+        "themeSurfaceMode",
+        "clientUpdatedAt",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CandidateRecord": {
+      "title": "CandidateRecord",
+      "description": "Candidate pair synced under an election workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Candidate ID."
+        },
+        "electionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent election ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "nomorUrut": {
+          "type": "integer",
+          "description": "Ballot number (1-99)."
+        },
+        "ketuaName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Chairman candidate name."
+        },
+        "ketuaClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Chairman candidate class."
+        },
+        "wakilName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Vice chairman candidate name."
+        },
+        "wakilClass": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Vice chairman candidate class."
+        },
+        "photoUrl": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 350000,
+          "description": "Candidate portrait asset path, URL, or compressed JPEG data URI."
+        },
+        "vision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Candidate pair vision."
+        },
+        "missions": {
+          "type": "array",
+          "description": "Bounded list of mission statements (max 20)."
+        },
+        "votes": {
+          "type": "integer",
+          "description": "Current vote count."
+        },
+        "accentColor": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 20,
+          "description": "Hex accent color."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "electionId",
+        "ownerId",
+        "nomorUrut",
+        "ketuaName",
+        "ketuaClass",
+        "wakilName",
+        "wakilClass",
+        "photoUrl",
+        "vision",
+        "missions",
+        "votes",
+        "accentColor",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "VoterRecord": {
+      "title": "VoterRecord",
+      "description": "Voter DPT entry synced under an election workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Voter document ID."
+        },
+        "electionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent election ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "nis": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "Student identification number (NIS/NISN)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Student full name."
+        },
+        "kelas": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Class label."
+        },
+        "grade": {
+          "type": "string",
+          "enum": ["X", "XI", "XII"],
+          "maxLength": 10,
+          "description": "Grade level."
+        },
+        "hasVoted": {
+          "type": "boolean",
+          "description": "Whether the student has voted."
+        },
+        "votedAt": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Optional ISO timestamp when the ballot was cast."
+        },
+        "votedCandidateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Optional ID of the candidate pair selected by the voter."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "electionId",
+        "ownerId",
+        "nis",
+        "name",
+        "kelas",
+        "grade",
+        "hasVoted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AuditLogRecord": {
+      "title": "AuditLogRecord",
+      "description": "Immutable election audit trail record synced under an election workspace.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Audit log document ID."
+        },
+        "electionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent election ID."
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "timestamp": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "ISO timestamp of the recorded action."
+        },
+        "actorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Name of actor performing the action."
+        },
+        "actorRole": {
+          "type": "string",
+          "enum": ["SUPERADMIN", "ADMIN", "SYSTEM"],
+          "maxLength": 20,
+          "description": "Role of the actor."
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Action code."
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Human-readable audit detail."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        }
+      },
+      "required": [
+        "id",
+        "electionId",
+        "ownerId",
+        "timestamp",
+        "actorName",
+        "actorRole",
+        "action",
+        "detail",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Organizer profiles indexed by Firebase Auth UID."
+    },
+    "/users/{userId}/sheetLinks/{linkId}": {
+      "schema": { "$ref": "#/entities/SheetLink" },
+      "description": "Google Sheets links saved by the authenticated organizer."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Authorized Firestore administrator accounts."
+    },
+    "/elections/{electionId}": {
+      "schema": { "$ref": "#/entities/ElectionWorkspace" },
+      "description": "Cloud-synced election workspace summary and settings."
+    },
+    "/elections/{electionId}/candidates/{candidateId}": {
+      "schema": { "$ref": "#/entities/CandidateRecord" },
+      "description": "Cloud-synced candidate tallies and profiles for an election workspace."
+    },
+    "/elections/{electionId}/voters/{voterId}": {
+      "schema": { "$ref": "#/entities/VoterRecord" },
+      "description": "Cloud-synced DPT voter roster for an election workspace."
+    },
+    "/elections/{electionId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLogRecord" },
+      "description": "Cloud-synced audit trail logs for an election workspace."
+    }
+  }
+}

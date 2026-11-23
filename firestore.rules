@@ -1,0 +1,458 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'tamtowiy8@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    // --- Entity Validation Blueprints ---
+    function isValidUser(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.role is string && data.role in ['operator', 'admin'] && data.role.size() <= 20
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRecord(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSheetLink(data, linkId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'spreadsheetId', 'spreadsheetTitle', 'sheetName',
+          'purpose', 'spreadsheetUrl', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'spreadsheetId', 'spreadsheetTitle', 'sheetName',
+          'purpose', 'spreadsheetUrl', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == linkId
+        && isValidId(data.ownerId)
+        && isValidId(data.spreadsheetId)
+        && data.spreadsheetId.size() >= 5
+        && data.spreadsheetTitle is string && data.spreadsheetTitle.size() >= 1 && data.spreadsheetTitle.size() <= 200
+        && data.sheetName is string && data.sheetName.size() >= 1 && data.sheetName.size() <= 120
+        && data.purpose is string && data.purpose in ['dpt_import', 'results_export', 'both'] && data.purpose.size() <= 30
+        && data.spreadsheetUrl is string && data.spreadsheetUrl.size() >= 10 && data.spreadsheetUrl.size() <= 300
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidElection(data, electionId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'schoolName', 'academicYear', 'electionTitle',
+          'isBoothOpen', 'hideLiveResults', 'totalDpt', 'totalVoted',
+          'totalValidVotes', 'startTime', 'endTime', 'logoUrl',
+          'themePresetId', 'themePrimaryColor', 'themeSecondaryColor',
+          'themeAccentColor', 'themeSurfaceMode', 'clientUpdatedAt',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'schoolName', 'academicYear', 'electionTitle',
+          'isBoothOpen', 'hideLiveResults', 'totalDpt', 'totalVoted',
+          'totalValidVotes', 'startTime', 'endTime', 'logoUrl',
+          'themePresetId', 'themePrimaryColor', 'themeSecondaryColor',
+          'themeAccentColor', 'themeSurfaceMode', 'voterLoginMode',
+          'candidateVotes', 'gradeTotals', 'gradeVoted', 'clientUpdatedAt',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == electionId
+        && isValidId(data.ownerId)
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 160
+        && data.academicYear is string && data.academicYear.size() >= 1 && data.academicYear.size() <= 40
+        && data.electionTitle is string && data.electionTitle.size() >= 1 && data.electionTitle.size() <= 200
+        && data.isBoothOpen is bool
+        && data.hideLiveResults is bool
+        && data.totalDpt is int && data.totalDpt >= 0 && data.totalDpt <= 50000
+        && data.totalVoted is int && data.totalVoted >= 0 && data.totalVoted <= 50000
+        && data.totalValidVotes is int && data.totalValidVotes >= 0 && data.totalValidVotes <= 50000
+        && data.startTime is string && data.startTime.size() >= 1 && data.startTime.size() <= 40
+        && data.endTime is string && data.endTime.size() >= 1 && data.endTime.size() <= 40
+        && data.logoUrl is string && data.logoUrl.size() >= 1 && data.logoUrl.size() <= 250000
+        && data.themePresetId is string && data.themePresetId.size() >= 1 && data.themePresetId.size() <= 60
+        && data.themePrimaryColor is string && data.themePrimaryColor.size() >= 4 && data.themePrimaryColor.size() <= 20
+        && data.themeSecondaryColor is string && data.themeSecondaryColor.size() >= 4 && data.themeSecondaryColor.size() <= 20
+        && data.themeAccentColor is string && data.themeAccentColor.size() >= 4 && data.themeAccentColor.size() <= 20
+        && data.themeSurfaceMode is string && data.themeSurfaceMode in ['light', 'warm', 'cool'] && data.themeSurfaceMode.size() <= 20
+        && (!('voterLoginMode' in data) || (data.voterLoginMode is string && data.voterLoginMode in ['NISN', 'QR_CODE', 'BOTH'] && data.voterLoginMode.size() <= 20))
+        && (!('candidateVotes' in data) || (data.candidateVotes is map && data.candidateVotes.size() <= 50))
+        && (!('gradeTotals' in data) || (data.gradeTotals is map && data.gradeTotals.size() <= 10))
+        && (!('gradeVoted' in data) || (data.gradeVoted is map && data.gradeVoted.size() <= 10))
+        && data.clientUpdatedAt is int && data.clientUpdatedAt >= 0 && data.clientUpdatedAt <= 9999999999999
+        && data.status is string && data.status in ['draft', 'active', 'closed'] && data.status.size() <= 20
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCandidate(data, electionId, candidateId) {
+      return data.keys().hasAll([
+          'id', 'electionId', 'ownerId', 'nomorUrut', 'ketuaName', 'ketuaClass',
+          'wakilName', 'wakilClass', 'photoUrl', 'vision', 'missions', 'votes',
+          'accentColor', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'electionId', 'ownerId', 'nomorUrut', 'ketuaName', 'ketuaClass',
+          'wakilName', 'wakilClass', 'photoUrl', 'vision', 'missions', 'votes',
+          'accentColor', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == candidateId
+        && isValidId(data.electionId)
+        && data.electionId == electionId
+        && isValidId(data.ownerId)
+        && data.nomorUrut is int && data.nomorUrut >= 1 && data.nomorUrut <= 99
+        && data.ketuaName is string && data.ketuaName.size() >= 1 && data.ketuaName.size() <= 120
+        && data.ketuaClass is string && data.ketuaClass.size() >= 1 && data.ketuaClass.size() <= 60
+        && data.wakilName is string && data.wakilName.size() >= 1 && data.wakilName.size() <= 120
+        && data.wakilClass is string && data.wakilClass.size() >= 1 && data.wakilClass.size() <= 60
+        && data.photoUrl is string && data.photoUrl.size() >= 1 && data.photoUrl.size() <= 350000
+        && data.vision is string && data.vision.size() >= 1 && data.vision.size() <= 1000
+        && data.missions is list && data.missions.size() >= 1 && data.missions.size() <= 20
+        && data.missions[0] is string && data.missions[0].size() >= 1 && data.missions[0].size() <= 300
+        && data.votes is int && data.votes >= 0 && data.votes <= 50000
+        && data.accentColor is string && data.accentColor.size() >= 4 && data.accentColor.size() <= 20
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVoter(data, electionId, voterId) {
+      return data.keys().hasAll([
+          'id', 'electionId', 'ownerId', 'nis', 'name', 'kelas',
+          'grade', 'hasVoted', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'electionId', 'ownerId', 'nis', 'name', 'kelas',
+          'grade', 'hasVoted', 'votedAt', 'votedCandidateId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == voterId
+        && isValidId(data.electionId)
+        && data.electionId == electionId
+        && isValidId(data.ownerId)
+        && data.nis is string && data.nis.size() >= 1 && data.nis.size() <= 40
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 60
+        && data.grade is string && data.grade in ['X', 'XI', 'XII'] && data.grade.size() <= 10
+        && data.hasVoted is bool
+        && (!('votedAt' in data) || (data.votedAt is string && data.votedAt.size() <= 60))
+        && (!('votedCandidateId' in data) || isValidId(data.votedCandidateId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data, electionId, logId) {
+      return data.keys().hasAll([
+          'id', 'electionId', 'ownerId', 'timestamp', 'actorName',
+          'actorRole', 'action', 'detail', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'electionId', 'ownerId', 'timestamp', 'actorName',
+          'actorRole', 'action', 'detail', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && data.id == logId
+        && isValidId(data.electionId)
+        && data.electionId == electionId
+        && isValidId(data.ownerId)
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 60
+        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 120
+        && data.actorRole is string && data.actorRole in ['SUPERADMIN', 'ADMIN', 'SYSTEM'] && data.actorRole.size() <= 20
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 80
+        && data.detail is string && data.detail.size() >= 1 && data.detail.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    // --- Collection: /test/connection (Startup Connectivity Check) ---
+    match /test/connection {
+      allow get: if isSignedIn();
+      allow list, create, update, delete: if false;
+    }
+
+    // --- Collection: /admins/{uid} ---
+    match /admins/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isBootstrappedAdmin()
+        && isValidId(uid)
+        && isValidAdminRecord(incoming(), uid)
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isBootstrappedAdmin() && isValidId(uid);
+    }
+
+    // --- Collection: /users/{userId} ---
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() || (isVerifiedUser() && existing().uid == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().uid == request.auth.uid
+        && (incoming().role == 'operator' || isAdmin())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUser(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']))
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+
+      // --- Subcollection: /users/{userId}/sheetLinks/{linkId} ---
+      match /sheetLinks/{linkId} {
+        allow get: if isValidId(userId) && isValidId(linkId) && (isOwner(userId) || isAdmin());
+        allow list: if isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(linkId)
+          && isValidSheetLink(incoming(), linkId)
+          && incoming().ownerId == request.auth.uid
+          && (isOwner(userId) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(linkId)
+          && isValidSheetLink(incoming(), linkId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (
+            isAdmin() ||
+            (isOwner(userId)
+              && existing().ownerId == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['spreadsheetTitle', 'sheetName', 'purpose', 'spreadsheetUrl', 'updatedAt']))
+          );
+        allow delete: if isValidId(userId)
+          && isValidId(linkId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    // --- Collection: /elections/{electionId} ---
+    match /elections/{electionId} {
+      allow get: if isValidId(electionId)
+        && isVerifiedUser()
+        && (existing().ownerId == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(electionId)
+        && isValidElection(incoming(), electionId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(electionId)
+        && isValidElection(incoming(), electionId)
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (existing().ownerId == request.auth.uid
+            && existing().status != 'closed'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'schoolName', 'academicYear', 'electionTitle', 'isBoothOpen',
+              'hideLiveResults', 'totalDpt', 'totalVoted', 'totalValidVotes',
+              'startTime', 'endTime', 'logoUrl', 'themePresetId',
+              'themePrimaryColor', 'themeSecondaryColor', 'themeAccentColor',
+              'themeSurfaceMode', 'voterLoginMode', 'candidateVotes',
+              'gradeTotals', 'gradeVoted', 'clientUpdatedAt', 'status', 'updatedAt'
+            ]))
+        );
+      allow delete: if isValidId(electionId)
+        && isVerifiedUser()
+        && (existing().ownerId == request.auth.uid || isAdmin());
+
+      // --- Subcollection: /elections/{electionId}/candidates/{candidateId} ---
+      match /candidates/{candidateId} {
+        allow get: if isValidId(electionId)
+          && isValidId(candidateId)
+          && isVerifiedUser()
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+        allow list: if isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(electionId)
+          && isValidId(candidateId)
+          && isValidCandidate(incoming(), electionId, candidateId)
+          && incoming().ownerId == request.auth.uid
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          )
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(electionId)
+          && isValidId(candidateId)
+          && isValidCandidate(incoming(), electionId, candidateId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().electionId == existing().electionId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            (get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+              && get(/databases/$(database)/documents/elections/$(electionId)).data.status != 'closed'
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'nomorUrut', 'ketuaName', 'ketuaClass', 'wakilName', 'wakilClass',
+                'photoUrl', 'vision', 'missions', 'votes', 'accentColor', 'updatedAt'
+              ]))
+          );
+        allow delete: if isValidId(electionId)
+          && isValidId(candidateId)
+          && isVerifiedUser()
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+      }
+
+      // --- Subcollection: /elections/{electionId}/voters/{voterId} ---
+      match /voters/{voterId} {
+        allow get: if isValidId(electionId)
+          && isValidId(voterId)
+          && isVerifiedUser()
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+        allow list: if isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(electionId)
+          && isValidId(voterId)
+          && isValidVoter(incoming(), electionId, voterId)
+          && incoming().ownerId == request.auth.uid
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          )
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(electionId)
+          && isValidId(voterId)
+          && isValidVoter(incoming(), electionId, voterId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().electionId == existing().electionId
+          && (incoming().createdAt == existing().createdAt || incoming().createdAt == request.time)
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            (get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+              && get(/databases/$(database)/documents/elections/$(electionId)).data.status != 'closed'
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'nis', 'name', 'kelas', 'grade', 'hasVoted', 'votedAt', 'votedCandidateId', 'createdAt', 'updatedAt'
+              ]))
+          );
+        allow delete: if isValidId(electionId)
+          && isValidId(voterId)
+          && isVerifiedUser()
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+      }
+
+      // --- Subcollection: /elections/{electionId}/auditLogs/{logId} ---
+      match /auditLogs/{logId} {
+        allow get: if isValidId(electionId)
+          && isValidId(logId)
+          && isVerifiedUser()
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+        allow list: if isVerifiedUser() && (existing().ownerId == request.auth.uid || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(electionId)
+          && isValidId(logId)
+          && isValidAuditLog(incoming(), electionId, logId)
+          && incoming().ownerId == request.auth.uid
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          )
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(electionId)
+          && isValidId(logId)
+          && isVerifiedUser()
+          && exists(/databases/$(database)/documents/elections/$(electionId))
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/elections/$(electionId)).data.ownerId == request.auth.uid
+          );
+      }
+    }
+  }
+}
