@@ -111,9 +111,10 @@ export function enqueuePendingOfflineVote(
 
 export function isOfflineVoteCompleted(
   item: PendingOfflineVote,
-  requireFirestoreSync: boolean
+  requireFirestoreSync: boolean,
+  requireServerSync = true
 ): boolean {
-  if (!item.syncedServer) return false;
+  if (requireServerSync && !item.syncedServer) return false;
   if (requireFirestoreSync && !item.syncedFirestore) return false;
   return true;
 }

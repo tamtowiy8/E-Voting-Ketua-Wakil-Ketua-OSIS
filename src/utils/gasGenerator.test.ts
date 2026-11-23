@@ -80,6 +80,8 @@ test('generateGasCodeGs includes SpreadsheetApp, LockService, RBAC CRUD, adminEd
   assert.match(gs, /Tamtowi Yahya, S\.Pd\./);
   assert.match(gs, /smansakabun/);
   assert.match(gs, /Smansakabun123!/);
+  assert.match(gs, /var hasLock = false;/);
+  assert.match(gs, /if \(hasLock\) lock\.releaseLock\(\);/);
 });
 
 test('generateGasIndexHtml matches AI Studio UI, stationary menu bar, Paslon edit UI, valid JS syntax, and avoids native alert/confirm', () => {

@@ -129,6 +129,41 @@ export function computeMaleSpeechParams(voiceName?: string): {
 
 // --- Client-side Audio / TTS Runtime & Cache ---
 
+const STATIC_VOICE_ASSET_BY_TEXT: Record<string, string> = {
+  'Selamat Datang di Aplikasi Pemilihan Ketua & Wakil Ketua OSIS SMA Negeri 1 Kabun. Gunakan hak suara Anda secara langsung, bebas, rahasia, jujur, dan adil.':
+    '/assets/voice/welcome-smansakabun.wav',
+  [VOTER_SAVED_VOICE_TEXT]: '/assets/voice/vote-saved.wav',
+};
+
+export function resolveStaticVoiceAssetUrl(text: string): string | null {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return STATIC_VOICE_ASSET_BY_TEXT[normalized] || null;
+}
+
+export function isValidRiffWaveBytes(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  return (
+    bytes[0] === 0x52 && // R
+    bytes[1] === 0x49 && // I
+    bytes[2] === 0x46 && // F
+    bytes[3] === 0x46 && // F
+    bytes[8] === 0x57 && // W
+    bytes[9] === 0x41 && // A
+    bytes[10] === 0x56 && // V
+    bytes[11] === 0x45 // E
+  );
+}
+
+function resolvePublicAssetPath(assetPath: string): string {
+  const base =
+    (typeof import.meta !== 'undefined' &&
+      (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL) ||
+    '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const trimmedPath = assetPath.startsWith('/') ? assetPath.slice(1) : assetPath;
+  return `${normalizedBase}${trimmedPath}`;
+}
+
 const FALLBACK_SENTINEL = '__SPEECH_FALLBACK__';
 const ttsDataUrlCache = new Map<string, string>();
 const inFlightTtsRequests = new Map<string, Promise<string>>();
@@ -218,28 +253,52 @@ export function unlockSpeechAndAudio(): void {
   }
 }
 
+async function fetchStaticVoiceBlobUrl(assetPath: string): Promise<string | null> {
+  try {
+    const res = await fetch(resolvePublicAssetPath(assetPath));
+    if (!res.ok) return null;
+    const buffer = await res.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    if (!isValidRiffWaveBytes(bytes)) return null;
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
 async function fetchServerTtsDataUrl(text: string): Promise<string> {
-  const key = text.trim();
+  const key = text.replace(/\s+/g, ' ').trim();
   if (!key) return FALLBACK_SENTINEL;
 
   const cached = ttsDataUrlCache.get(key);
   if (cached) return cached;
-
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    return FALLBACK_SENTINEL;
-  }
 
   const pending = inFlightTtsRequests.get(key);
   if (pending) return pending;
 
   const task = (async () => {
     try {
+      const staticAsset = resolveStaticVoiceAssetUrl(key);
+      if (staticAsset) {
+        const staticUrl = await fetchStaticVoiceBlobUrl(staticAsset);
+        if (staticUrl) {
+          ttsDataUrlCache.set(key, staticUrl);
+          return staticUrl;
+        }
+      }
+
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        return FALLBACK_SENTINEL;
+      }
+
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: key }),
       });
-      if (!res.ok) {
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      if (!res.ok || !contentType.includes('application/json')) {
         ttsDataUrlCache.set(key, FALLBACK_SENTINEL);
         return FALLBACK_SENTINEL;
       }

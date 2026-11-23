@@ -6,6 +6,7 @@ import {
   generateSixDigitToken,
   sortVotersOrdered,
 } from './electionLogic';
+import { safeParseGoogleSheetsResponse } from './safeJson';
 
 export interface SpreadsheetSheetMeta {
   sheetId: number;
@@ -178,18 +179,6 @@ export function buildElectionSheetPayload(dbState: DatabaseState): {
   return { rekapRows, dptRows, paslonRows };
 }
 
-async function parseGoogleError(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: { message?: string; status?: string } };
-    if (data?.error?.message) {
-      return data.error.message;
-    }
-  } catch {
-    // Fallback below
-  }
-  return `Permintaan Google Sheets gagal (HTTP ${res.status}).`;
-}
-
 export async function fetchSpreadsheetMeta(
   accessToken: string,
   spreadsheetId: string
@@ -201,15 +190,12 @@ export async function fetchSpreadsheetMeta(
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  if (!res.ok) {
-    throw new Error(await parseGoogleError(res));
-  }
-  const data = (await res.json()) as {
+  const data = await safeParseGoogleSheetsResponse<{
     spreadsheetId: string;
     spreadsheetUrl?: string;
     properties?: { title?: string };
     sheets?: Array<{ properties?: { sheetId?: number; title?: string; index?: number } }>;
-  };
+  }>(res, 'membaca metadata Spreadsheet');
 
   const sheets: SpreadsheetSheetMeta[] = (data.sheets || []).map((s, idx) => ({
     sheetId: s.properties?.sheetId ?? idx,
@@ -240,10 +226,10 @@ export async function fetchSheetValues(
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  if (!res.ok) {
-    throw new Error(await parseGoogleError(res));
-  }
-  const data = (await res.json()) as { values?: string[][] };
+  const data = await safeParseGoogleSheetsResponse<{ values?: string[][] }>(
+    res,
+    'membaca data sheet'
+  );
   return Array.isArray(data.values) ? data.values : [];
 }
 
@@ -272,16 +258,12 @@ export async function createElectionSpreadsheet(
     }),
   });
 
-  if (!createRes.ok) {
-    throw new Error(await parseGoogleError(createRes));
-  }
-
-  const created = (await createRes.json()) as {
+  const created = await safeParseGoogleSheetsResponse<{
     spreadsheetId: string;
     spreadsheetUrl?: string;
     properties?: { title?: string };
     sheets?: Array<{ properties?: { sheetId?: number; title?: string; index?: number } }>;
-  };
+  }>(createRes, 'membuat Spreadsheet baru');
 
   const { rekapRows, dptRows, paslonRows } = buildElectionSheetPayload(dbState);
   const batchRes = await fetch(
@@ -305,9 +287,9 @@ export async function createElectionSpreadsheet(
     }
   );
 
-  if (!batchRes.ok) {
-    throw new Error(await parseGoogleError(batchRes));
-  }
+  await safeParseGoogleSheetsResponse<unknown>(batchRes, 'mengisi data Spreadsheet baru', {
+    allowEmpty: true,
+  });
 
   return {
     spreadsheetId: created.spreadsheetId,
@@ -351,9 +333,9 @@ export async function updateExistingSpreadsheet(
         }),
       }
     );
-    if (!addRes.ok) {
-      throw new Error(await parseGoogleError(addRes));
-    }
+    await safeParseGoogleSheetsResponse<unknown>(addRes, 'menambahkan tab Spreadsheet', {
+      allowEmpty: true,
+    });
   }
 
   const clearRes = await fetch(
@@ -371,9 +353,9 @@ export async function updateExistingSpreadsheet(
       }),
     }
   );
-  if (!clearRes.ok) {
-    throw new Error(await parseGoogleError(clearRes));
-  }
+  await safeParseGoogleSheetsResponse<unknown>(clearRes, 'membersihkan tab Spreadsheet', {
+    allowEmpty: true,
+  });
 
   const { rekapRows, dptRows, paslonRows } = buildElectionSheetPayload(dbState);
   const writeRes = await fetch(
@@ -397,9 +379,9 @@ export async function updateExistingSpreadsheet(
     }
   );
 
-  if (!writeRes.ok) {
-    throw new Error(await parseGoogleError(writeRes));
-  }
+  await safeParseGoogleSheetsResponse<unknown>(writeRes, 'memperbarui data Spreadsheet', {
+    allowEmpty: true,
+  });
 
   return fetchSpreadsheetMeta(accessToken, spreadsheetId);
 }

@@ -6,6 +6,7 @@ import {
   extractSpreadsheetId,
   parseSheetRowsToVoters,
 } from './googleSheets';
+import { safeParseGoogleSheetsResponse } from './safeJson';
 
 test('extractSpreadsheetId extracts ID from URLs and raw IDs cleanly', () => {
   assert.equal(
@@ -44,4 +45,33 @@ test('buildElectionSheetPayload generates Rekap, DPT, and Paslon tabs with corre
   assert.ok(payload.rekapRows.some((r) => r[0] === 'Sekolah' && r[1] === SEED_DATABASE.settings.schoolName));
   assert.equal(payload.dptRows.length, SEED_DATABASE.voters.length + 1);
   assert.equal(payload.paslonRows.length, SEED_DATABASE.candidates.length + 1);
+});
+
+test('safeParseGoogleSheetsResponse handles HTML error pages cleanly without Unexpected token <', async () => {
+  const htmlOkRes = new Response('<!DOCTYPE html><html><body>Captive Portal</body></html>', {
+    status: 200,
+    headers: { 'Content-Type': 'text/html' },
+  });
+  await assert.rejects(
+    () => safeParseGoogleSheetsResponse(htmlOkRes, 'membaca metadata Spreadsheet'),
+    (err: Error) => /halaman HTML/.test(err.message) && !err.message.includes('Unexpected token')
+  );
+
+  const html502Res = new Response('\uFEFF<!doctype html><html><body>502 Bad Gateway</body></html>', {
+    status: 502,
+    headers: { 'Content-Type': 'text/html' },
+  });
+  await assert.rejects(
+    () => safeParseGoogleSheetsResponse(html502Res, 'membuat Spreadsheet baru'),
+    (err: Error) => /HTTP 502/.test(err.message) && !err.message.includes('Unexpected token')
+  );
+
+  const jsonErrRes = new Response(
+    JSON.stringify({ error: { message: 'The caller does not have permission' } }),
+    { status: 403, headers: { 'Content-Type': 'application/json' } }
+  );
+  await assert.rejects(
+    () => safeParseGoogleSheetsResponse(jsonErrRes, 'membaca data sheet'),
+    /does not have permission/
+  );
 });

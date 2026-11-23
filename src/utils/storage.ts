@@ -197,11 +197,61 @@ export function clearAdminSession(): void {
   }
 }
 
-// Cross-Device Server Synchronization (SSE + Fetch fallback)
+// Cross-Device Server Synchronization (SSE + Fetch fallback — automatically disabled on static Netlify hosting)
+type ServerBackendStatus = 'unknown' | 'express' | 'static';
+let serverBackendStatus: ServerBackendStatus = 'unknown';
+let probeBackendPromise: Promise<boolean> | null = null;
+
+function isJsonResponse(res: Response): boolean {
+  const contentType = res.headers.get('content-type');
+  return Boolean(contentType && contentType.toLowerCase().includes('application/json'));
+}
+
+export function hasExpressBackend(): boolean {
+  return serverBackendStatus === 'express';
+}
+
+export async function probeServerBackend(): Promise<boolean> {
+  if (serverBackendStatus === 'express') return true;
+  if (serverBackendStatus === 'static') return false;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    return false;
+  }
+  if (probeBackendPromise) {
+    return probeBackendPromise;
+  }
+
+  probeBackendPromise = (async () => {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      if (!res.ok || !isJsonResponse(res)) {
+        serverBackendStatus = 'static';
+        return false;
+      }
+      const data = (await res.json()) as { ok?: boolean };
+      if (data && data.ok === true) {
+        serverBackendStatus = 'express';
+        return true;
+      }
+      serverBackendStatus = 'static';
+      return false;
+    } catch {
+      return false;
+    } finally {
+      probeBackendPromise = null;
+    }
+  })();
+
+  return probeBackendPromise;
+}
+
 export function initServerSync(onRemoteDb: (nextDb: DatabaseState) => void): () => void {
   let active = true;
   let lastVersion = 0;
   let lastAppliedTs = 0;
+  let es: EventSource | null = null;
+  let pollTimer: number | null = null;
+  let listenersAttached = false;
 
   const applyServerPayload = (rawDb: Partial<DatabaseState> | undefined, version?: number) => {
     if (!active || !rawDb) return;
@@ -225,11 +275,16 @@ export function initServerSync(onRemoteDb: (nextDb: DatabaseState) => void): () 
   };
 
   const fetchLatest = async () => {
-    if (!active) return;
+    if (!active || serverBackendStatus === 'static') return;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       const res = await fetch('/api/state', { cache: 'no-store' });
-      if (!res.ok) return;
+      if (!res.ok || !isJsonResponse(res)) {
+        if (res.ok || res.status === 404) {
+          serverBackendStatus = 'static';
+        }
+        return;
+      }
       const data = (await res.json()) as { db?: DatabaseState; version?: number };
       applyServerPayload(data.db, data.version);
     } catch {
@@ -237,43 +292,52 @@ export function initServerSync(onRemoteDb: (nextDb: DatabaseState) => void): () 
     }
   };
 
-  void fetchLatest();
-
-  let es: EventSource | null = null;
-  if (typeof EventSource !== 'undefined') {
-    es = new EventSource('/api/events');
-    const handleEvent = (ev: MessageEvent) => {
-      try {
-        const data = JSON.parse(ev.data) as { db?: DatabaseState; version?: number };
-        applyServerPayload(data.db, data.version);
-      } catch {
-        // Ignore invalid JSON
-      }
-    };
-    es.addEventListener('init', handleEvent as EventListener);
-    es.addEventListener('state', handleEvent as EventListener);
-  }
-
-  const pollTimer = window.setInterval(() => {
-    void fetchLatest();
-  }, 5000);
-
   const handleResume = () => {
     if (document.visibilityState === 'visible') {
       void fetchLatest();
     }
   };
 
-  window.addEventListener('focus', fetchLatest);
-  window.addEventListener('online', fetchLatest);
-  document.addEventListener('visibilitychange', handleResume);
+  void (async () => {
+    const hasServer = await probeServerBackend();
+    if (!active || !hasServer) return;
+
+    void fetchLatest();
+
+    if (typeof EventSource !== 'undefined') {
+      es = new EventSource('/api/events');
+      const handleEvent = (ev: MessageEvent) => {
+        try {
+          const data = JSON.parse(ev.data) as { db?: DatabaseState; version?: number };
+          applyServerPayload(data.db, data.version);
+        } catch {
+          // Ignore invalid JSON
+        }
+      };
+      es.addEventListener('init', handleEvent as EventListener);
+      es.addEventListener('state', handleEvent as EventListener);
+    }
+
+    pollTimer = window.setInterval(() => {
+      void fetchLatest();
+    }, 5000);
+
+    window.addEventListener('focus', fetchLatest);
+    window.addEventListener('online', fetchLatest);
+    document.addEventListener('visibilitychange', handleResume);
+    listenersAttached = true;
+  })();
 
   return () => {
     active = false;
-    window.clearInterval(pollTimer);
-    window.removeEventListener('focus', fetchLatest);
-    window.removeEventListener('online', fetchLatest);
-    document.removeEventListener('visibilitychange', handleResume);
+    if (pollTimer !== null) {
+      window.clearInterval(pollTimer);
+    }
+    if (listenersAttached) {
+      window.removeEventListener('focus', fetchLatest);
+      window.removeEventListener('online', fetchLatest);
+      document.removeEventListener('visibilitychange', handleResume);
+    }
     es?.close();
   };
 }
@@ -283,6 +347,9 @@ async function postJson<T>(
   body: unknown,
   syncLocalOnSuccess = true
 ): Promise<T | null> {
+  if (serverBackendStatus === 'static') {
+    return null;
+  }
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -290,6 +357,12 @@ async function postJson<T>(
       body: JSON.stringify(body),
     });
     if (res.status >= 500) {
+      return null;
+    }
+    if (!isJsonResponse(res)) {
+      if (res.status === 404 || res.ok) {
+        serverBackendStatus = 'static';
+      }
       return null;
     }
     const data = (await res.json()) as T & { ok?: boolean; db?: DatabaseState; version?: number };
@@ -315,9 +388,17 @@ async function postJson<T>(
 }
 
 export async function apiFetchLatestState(): Promise<DatabaseState | null> {
+  if (serverBackendStatus === 'static') {
+    return null;
+  }
   try {
     const res = await fetch('/api/state', { cache: 'no-store' });
-    if (!res.ok) return null;
+    if (!res.ok || !isJsonResponse(res)) {
+      if (res.status === 404 || res.ok) {
+        serverBackendStatus = 'static';
+      }
+      return null;
+    }
     const data = (await res.json()) as { db?: DatabaseState };
     if (!data?.db) return null;
     const reconciled = reconcilePendingVotesIntoDb(

@@ -27,6 +27,7 @@ import {
   validateAdminQrLogin,
 } from './src/utils/electionLogic.ts';
 import { isValidGasWebAppUrl } from './src/utils/gasGenerator.ts';
+import { isHtmlResponseText, parseGasPayloadText } from './src/utils/safeJson.ts';
 import { DEFAULT_THEME } from './src/utils/theme.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -436,42 +437,27 @@ async function startServer(): Promise<void> {
         method,
         headers:
           method === 'POST'
-            ? { 'Content-Type': 'text/plain;charset=utf-8' }
-            : undefined,
+            ? { 'Content-Type': 'text/plain;charset=utf-8', Accept: 'application/json' }
+            : { Accept: 'application/json' },
         body: method === 'POST' ? JSON.stringify(payload ?? {}) : undefined,
         redirect: 'follow',
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(25000),
       });
 
       const rawText = await gasResponse.text();
-      if (!gasResponse.ok) {
-        res.status(502).json({
-          ok: false,
-          error: `Google Apps Script merespons HTTP ${gasResponse.status}.`,
-        });
-        return;
+      try {
+        const parsed = parseGasPayloadText<{ ok?: boolean; error?: string }>(
+          rawText,
+          gasResponse.status,
+          targetUrl.toString()
+        );
+        res.json({ ok: true, data: parsed });
+      } catch (parseErr) {
+        const msg =
+          parseErr instanceof Error ? parseErr.message : 'Gagal membaca respons Google Apps Script.';
+        const statusCode = isHtmlResponseText(rawText) ? 403 : gasResponse.ok ? 400 : 502;
+        res.status(statusCode).json({ ok: false, error: msg });
       }
-
-      const trimmed = rawText.trim();
-      if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
-        res.status(403).json({
-          ok: false,
-          error:
-            'Google Apps Script mengembalikan halaman HTML/login. Pastikan saat Deploy Web App opsi "Who has access" diatur ke "Anyone".',
-        });
-        return;
-      }
-
-      const parsed = JSON.parse(trimmed) as { ok?: boolean; error?: string };
-      if (parsed && parsed.ok === false) {
-        res.status(400).json({
-          ok: false,
-          error: parsed.error || 'Permintaan ditolak oleh Google Apps Script.',
-        });
-        return;
-      }
-
-      res.json({ ok: true, data: parsed });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal terhubung ke Google Apps Script.';
       res.status(502).json({ ok: false, error: msg });

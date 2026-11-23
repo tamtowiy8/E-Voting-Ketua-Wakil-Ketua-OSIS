@@ -433,18 +433,26 @@ function jsonOutput_(obj) {
 function doGet(e) {
   var action = e && e.parameter ? e.parameter.action : '';
   if (action === 'ping') {
-    var db = readDatabaseState_();
-    return jsonOutput_({
-      ok: true,
-      app: 'E-VOTING PENGURUS OSIS',
-      schoolName: db.settings.schoolName,
-      totalDpt: db.voters.length,
-      totalCandidates: db.candidates.length,
-      lastUpdated: db.lastUpdated
-    });
+    try {
+      var db = readDatabaseState_();
+      return jsonOutput_({
+        ok: true,
+        app: 'E-VOTING PENGURUS OSIS',
+        schoolName: db.settings.schoolName,
+        totalDpt: db.voters.length,
+        totalCandidates: db.candidates.length,
+        lastUpdated: db.lastUpdated
+      });
+    } catch (err) {
+      return jsonOutput_({ ok: false, error: err && err.message ? err.message : String(err) });
+    }
   }
   if (action === 'getState') {
-    return jsonOutput_({ ok: true, db: readDatabaseState_() });
+    try {
+      return jsonOutput_({ ok: true, db: readDatabaseState_() });
+    } catch (err) {
+      return jsonOutput_({ ok: false, error: err && err.message ? err.message : String(err) });
+    }
   }
 
   var tpl = HtmlService.createTemplateFromFile('Index');
@@ -458,8 +466,10 @@ function doGet(e) {
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  var hasLock = false;
   try {
+    lock.waitLock(15000);
+    hasLock = true;
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     var action = body.action || '';
     var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -478,7 +488,7 @@ function doPost(e) {
   } catch (err) {
     return jsonOutput_({ ok: false, error: err && err.message ? err.message : String(err) });
   } finally {
-    lock.releaseLock();
+    if (hasLock) lock.releaseLock();
   }
 }
 
@@ -536,8 +546,10 @@ function loginVoter(nisInput) {
 
 function submitVote(voterIdOrNis, candidateId) {
   var lock = LockService.getScriptLock();
-  lock.waitLock(10000);
+  var hasLock = false;
   try {
+    lock.waitLock(15000);
+    hasLock = true;
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     ensureInitialized_(ss);
     var dSheet = ss.getSheetByName(SHEET_DPT);
@@ -597,8 +609,10 @@ function submitVote(voterIdOrNis, candidateId) {
       timestamp: nowIso
     };
     return { ok: true, receipt: receipt, db: readDatabaseState_() };
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
   } finally {
-    lock.releaseLock();
+    if (hasLock) lock.releaseLock();
   }
 }
 

@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  Check,
   Cloud,
   CloudDownload,
   CloudUpload,
+  Copy,
   ExternalLink,
   FileSpreadsheet,
   FolderSync,
+  Globe,
   HardDrive,
   Link2,
   Loader2,
@@ -39,9 +42,11 @@ import {
   FIRESTORE_SPARK_STORAGE_BYTES,
   formatFirestoreErrorMessage,
   formatStorageBytes,
+  getFirebaseAuthSettingsUrl,
   getFirestoreUpgradeUrl,
   getFirestoreUsageUrl,
   isFirestoreQuotaError,
+  isUnauthorizedDomainAuthError,
   loadDailyQuotaUsage,
   subscribeDailyQuotaUsage,
   type FirestoreDailyUsageRecord,
@@ -115,6 +120,11 @@ export function GoogleSheetsSyncPanel({
   // Firestore synced state
   const [savedLinks, setSavedLinks] = useState<SheetLinkDoc[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
+  const [authError, setAuthError] = useState<{
+    message: string;
+    isUnauthorizedDomain: boolean;
+  } | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
 
   // Import from Google Sheets state
   const [importInput, setImportInput] = useState('');
@@ -201,9 +211,25 @@ export function GoogleSheetsSyncPanel({
     };
   }, [authReady, user, quotaExceeded, onNotify, setQuotaExceeded]);
 
+  const activeHostname =
+    typeof window !== 'undefined' ? window.location.hostname || 'localhost' : 'localhost';
+
+  const handleCopyHostname = async () => {
+    try {
+      await navigator.clipboard.writeText(activeHostname);
+      setCopiedDomain(true);
+      onNotify('success', 'Domain Disalin', `Domain "${activeHostname}" berhasil disalin ke clipboard.`);
+      window.setTimeout(() => setCopiedDomain(false), 2500);
+    } catch {
+      onNotify('info', 'Salin Manual', `Salin domain berikut secara manual: ${activeHostname}`);
+    }
+  };
+
   const handleGoogleSignIn = async () => {
+    setAuthError(null);
     try {
       const res = await signInWithGoogle();
+      setAuthError(null);
       onNotify(
         'success',
         'Akun Google Terhubung',
@@ -211,11 +237,16 @@ export function GoogleSheetsSyncPanel({
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Gagal masuk dengan Google.';
+      const isDomainErr =
+        isUnauthorizedDomainAuthError(err) ||
+        msg.toLowerCase().includes('authorized domains');
+      setAuthError({ message: msg, isUnauthorizedDomain: isDomainErr });
       onNotify('error', 'Autentikasi Google Gagal', msg);
     }
   };
 
   const handleGoogleSignOut = async () => {
+    setAuthError(null);
     await signOutGoogle();
     onNotify('info', 'Akun Google Diputuskan', 'Token akses Google Sheets telah dibersihkan.');
   };
@@ -531,6 +562,130 @@ export function GoogleSheetsSyncPanel({
               memori setelah memuat ulang halaman. Klik <strong>Sign in with Google</strong> di atas
               untuk menyambungkan kembali akses Google Sheets.
             </span>
+          </div>
+        )}
+
+        {authError && (
+          <div
+            role="alert"
+            data-testid="firebase-auth-error-banner"
+            className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-950 space-y-2.5"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" aria-hidden="true" />
+                <div className="space-y-1 min-w-0">
+                  <p className="font-extrabold text-rose-900">
+                    {authError.isUnauthorizedDomain
+                      ? 'Domain Netlify Belum Diizinkan di Firebase Authentication'
+                      : 'Autentikasi Google Gagal'}
+                  </p>
+                  <p className="text-rose-800 leading-relaxed">{authError.message}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAuthError(null)}
+                aria-label="Tutup peringatan autentikasi"
+                className="p-1 rounded-lg text-rose-500 hover:text-rose-800 hover:bg-rose-100 cursor-pointer shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {authError.isUnauthorizedDomain && (
+              <div className="pl-6 space-y-2">
+                <ol className="list-decimal list-inside space-y-1 text-[11px] text-rose-900">
+                  <li>
+                    Salin domain persis di bawah (tanpa <span className="font-mono">https://</span>{' '}
+                    dan tanpa tanda <span className="font-mono">*</span>):{' '}
+                    <span className="font-mono font-bold bg-white px-1.5 py-0.5 rounded border border-rose-200">
+                      {activeHostname}
+                    </span>
+                  </li>
+                  <li>
+                    Buka <strong>Firebase Console → Authentication → Settings → Authorized domains</strong>, lalu klik <strong>Add domain</strong>.
+                  </li>
+                  <li>
+                    Tempel <span className="font-mono font-semibold">{activeHostname}</span>, simpan, lalu klik <strong>Sign in with Google</strong> kembali.
+                  </li>
+                </ol>
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyHostname()}
+                    data-testid="copy-active-domain-error-btn"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-300 bg-white hover:bg-rose-100 text-[11px] font-bold text-rose-900 cursor-pointer"
+                  >
+                    {copiedDomain ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" aria-hidden="true" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" aria-hidden="true" />
+                    )}
+                    <span>{copiedDomain ? 'Domain Disalin' : `Salin "${activeHostname}"`}</span>
+                  </button>
+                  <a
+                    href={getFirebaseAuthSettingsUrl(FIRESTORE_PROJECT_ID)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-[11px] font-bold"
+                  >
+                    <span>Buka Authorized Domains Firebase</span>
+                    <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                  </a>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {typeof window !== 'undefined' && (
+          <div
+            data-testid="netlify-domain-readiness-box"
+            className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+          >
+            <div className="flex items-start gap-2.5 min-w-0">
+              <Globe className="w-4 h-4 text-[var(--app-secondary)] shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-bold text-slate-900">
+                  Domain Hosting Aktif:{' '}
+                  <span className="font-mono text-[var(--app-secondary)]">
+                    {activeHostname}
+                  </span>
+                </p>
+                <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
+                  Saat membuka aplikasi via <strong>Netlify</strong>, daftarkan nama domain persis{' '}
+                  <span className="font-mono font-semibold text-slate-800">{activeHostname}</span>{' '}
+                  (tanpa <span className="font-mono">https://</span> maupun <span className="font-mono">*</span>) pada{' '}
+                  <strong>Authorized domains</strong> di Firebase Authentication agar Login Google &amp;
+                  Cloud Sync berjalan lancar.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleCopyHostname()}
+                data-testid="copy-active-domain-btn"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-800 whitespace-nowrap cursor-pointer"
+              >
+                {copiedDomain ? (
+                  <Check className="w-3 h-3 text-emerald-600" aria-hidden="true" />
+                ) : (
+                  <Copy className="w-3 h-3" aria-hidden="true" />
+                )}
+                <span>{copiedDomain ? 'Tersalin' : 'Salin Domain'}</span>
+              </button>
+              <a
+                href={getFirebaseAuthSettingsUrl(FIRESTORE_PROJECT_ID)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-[11px] font-bold text-slate-800 whitespace-nowrap"
+              >
+                <span>Atur Domain Firebase</span>
+                <ExternalLink className="w-3 h-3" aria-hidden="true" />
+              </a>
+            </div>
           </div>
         )}
       </section>

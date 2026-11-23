@@ -67,9 +67,11 @@ import {
   apiUpdateSettings,
   apiUpdateVoters,
   clearAdminSession,
+  hasExpressBackend,
   initServerSync,
   loadAdminSession,
   loadDatabase,
+  probeServerBackend,
   saveAdminSession,
   saveDatabase,
   subscribeDatabaseChanges,
@@ -329,6 +331,7 @@ function AppContent() {
 
     flushingQueueRef.current = true;
     try {
+      const hasServer = hasExpressBackend() || (await probeServerBackend());
       const remainingQueue: PendingOfflineVote[] = [];
       let completedCount = 0;
       let serverProgressCount = 0;
@@ -339,20 +342,24 @@ function AppContent() {
         let lastError = item.lastError;
 
         if (!syncedServer) {
-          const serverRes = await apiCastVote(item.voterId, item.candidateId);
-          if (serverRes !== null) {
-            if (serverRes.ok) {
-              syncedServer = true;
-              lastError = undefined;
-              serverProgressCount += 1;
-            } else if (
-              serverRes.error &&
-              /sudah menggunakan hak suara|tidak ditemukan/i.test(serverRes.error)
-            ) {
-              syncedServer = true;
-              lastError = undefined;
-            } else {
-              lastError = serverRes.error || 'Gagal menyinkronkan suara ke server.';
+          if (!hasServer) {
+            syncedServer = true;
+          } else {
+            const serverRes = await apiCastVote(item.voterId, item.candidateId);
+            if (serverRes !== null) {
+              if (serverRes.ok) {
+                syncedServer = true;
+                lastError = undefined;
+                serverProgressCount += 1;
+              } else if (
+                serverRes.error &&
+                /sudah menggunakan hak suara|tidak ditemukan/i.test(serverRes.error)
+              ) {
+                syncedServer = true;
+                lastError = undefined;
+              } else {
+                lastError = serverRes.error || 'Gagal menyinkronkan suara ke server.';
+              }
             }
           }
         }
@@ -376,6 +383,9 @@ function AppContent() {
             if (/sudah menggunakan hak suara|tidak ditemukan di firestore|belum tersedia/i.test(msg)) {
               syncedFirestore = true;
               lastError = undefined;
+              if (/tidak ditemukan di firestore|belum tersedia/i.test(msg)) {
+                void syncSummaryAndCandidatesToFirestore(user, loadDatabase()).catch(() => {});
+              }
             } else if (isFirestoreQuotaError(cloudErr)) {
               handleCloudSyncFailure(cloudErr);
               lastError = 'Kuota Firestore penuh sementara.';
@@ -395,7 +405,7 @@ function AppContent() {
           lastError,
         };
 
-        if (isOfflineVoteCompleted(updatedItem, requireFirestore)) {
+        if (isOfflineVoteCompleted(updatedItem, requireFirestore, hasServer)) {
           completedCount += 1;
         } else {
           remainingQueue.push(updatedItem);
@@ -406,7 +416,7 @@ function AppContent() {
       setPendingOfflineVotes(remainingQueue);
 
       if (completedCount > 0 || serverProgressCount > 0) {
-        const latestServerDb = await apiFetchLatestState();
+        const latestServerDb = hasServer ? await apiFetchLatestState() : null;
         if (latestServerDb) {
           setDb(reconcilePendingVotesIntoDb(latestServerDb, remainingQueue));
         }
@@ -414,7 +424,9 @@ function AppContent() {
         notifyRef.current(
           'success',
           'Sinkronisasi Offline Berhasil',
-          `${syncedTotal} suara yang tersimpan offline telah otomatis dikirim ke server.`
+          hasServer
+            ? `${syncedTotal} suara yang tersimpan offline telah otomatis dikirim ke server.`
+            : `${syncedTotal} suara yang tersimpan offline telah otomatis disinkronkan ke cloud.`
         );
       }
     } finally {
@@ -780,6 +792,7 @@ function AppContent() {
     const localVoterRecord = latestLocalDb.voters.find((v) => v.id === activeVoterId);
     const voterExistsLocally = Boolean(localVoterRecord);
     const isBrowserOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    const expressAvailable = isBrowserOffline ? hasExpressBackend() : await probeServerBackend();
 
     if (
       hasVoterPendingOfflineVote(
@@ -841,7 +854,7 @@ function AppContent() {
                 currentVoter,
                 candidateId,
                 null,
-                { syncedServer: false, syncedFirestore: false },
+                { syncedServer: !expressAvailable, syncedFirestore: false },
                 errMsg
               );
               notify(
@@ -861,7 +874,7 @@ function AppContent() {
           currentVoter,
           candidateId,
           null,
-          { syncedServer: false, syncedFirestore: false }
+          { syncedServer: !expressAvailable, syncedFirestore: false }
         );
         notify(
           'info',
@@ -876,28 +889,37 @@ function AppContent() {
       if (!targetVoter) {
         throw new Error('Data pemilih tidak ditemukan.');
       }
+      if (localVoterRecord?.hasVoted) {
+        notify(
+          'error',
+          'Pengiriman Suara Gagal',
+          'Anda sudah menggunakan hak suara dan tidak dapat memilih ulang.'
+        );
+        return null;
+      }
 
-      const serverRes = isBrowserOffline ? null : await apiCastVote(activeVoterId, candidateId);
-
-      if (serverRes) {
-        if (!serverRes.ok || !serverRes.receipt) {
-          if (serverRes.db) {
-            setDb(reconcilePendingVotesIntoDb(serverRes.db, loadPendingOfflineVotes()));
+      // Case 2A: Express server backend is active & online
+      if (expressAvailable && !isBrowserOffline) {
+        const serverRes = await apiCastVote(activeVoterId, candidateId);
+        if (serverRes) {
+          if (!serverRes.ok || !serverRes.receipt) {
+            if (serverRes.db) {
+              setDb(reconcilePendingVotesIntoDb(serverRes.db, loadPendingOfflineVotes()));
+            }
+            notify('error', 'Pengiriman Suara Gagal', serverRes.error || 'Gagal mengirim suara.');
+            return null;
           }
-          notify('error', 'Pengiriman Suara Gagal', serverRes.error || 'Gagal mengirim suara.');
-          return null;
-        }
 
-        const reconciledDb = reconcilePendingVotesIntoDb(serverRes.db || loadDatabase(), loadPendingOfflineVotes());
-        setDb(reconciledDb);
-        const nextLocalTs = reconciledDb.lastUpdated;
-        setLocalMutationCounter((c) => c + 1);
+          const reconciledDb = reconcilePendingVotesIntoDb(
+            serverRes.db || loadDatabase(),
+            loadPendingOfflineVotes()
+          );
+          setDb(reconciledDb);
+          const nextLocalTs = reconciledDb.lastUpdated;
+          setLocalMutationCounter((c) => c + 1);
 
-        let cloudPending = false;
-        if (user && !quotaExceeded) {
-          if (isBrowserOffline) {
-            cloudPending = true;
-          } else {
+          let cloudPending = false;
+          if (user && !quotaExceeded) {
             lastSyncedTsRef.current = nextLocalTs;
             syncInFlightRef.current = true;
             try {
@@ -928,33 +950,113 @@ function AppContent() {
               syncInFlightRef.current = false;
             }
           }
+
+          if (cloudPending) {
+            const queuedReceipt = persistOfflineVote(
+              targetVoter,
+              candidateId,
+              serverRes.receipt,
+              { syncedServer: true, syncedFirestore: false }
+            );
+            notify(
+              'info',
+              'Suara Tersimpan & Antre Cloud',
+              'Suara tersimpan di server lokal dan akan otomatis tersinkron ke cloud saat internet tersambung.'
+            );
+            return queuedReceipt;
+          }
+
+          notify('success', 'Suara Tercatat', 'Terima kasih, suara sah Anda telah disimpan.');
+          return serverRes.receipt;
+        }
+      }
+
+      // Case 2B: Static Netlify hosting while online -> commit locally, push to Firestore & Apps Script Spreadsheet
+      if (!expressAvailable && !isBrowserOffline) {
+        const { nextState, receipt } = castVoteInState(latestLocalDb, targetVoter.id, candidateId);
+        const reconciledDb = reconcilePendingVotesIntoDb(nextState, loadPendingOfflineVotes());
+        const saved = saveDatabase(reconciledDb);
+        setDb(saved);
+        setLocalMutationCounter((c) => c + 1);
+        setActiveVoterSnapshot({
+          ...targetVoter,
+          hasVoted: true,
+          votedAt: receipt.timestamp,
+          votedCandidateId: candidateId,
+        });
+
+        let cloudPending = false;
+        if (user && !quotaExceeded) {
+          lastSyncedTsRef.current = saved.lastUpdated;
+          syncInFlightRef.current = true;
+          setSyncStatus('syncing');
+          try {
+            const txRes = await castVoteTransactionInFirestore(
+              user,
+              targetVoter,
+              candidateId,
+              receipt.timestamp
+            );
+            lastSyncedTsRef.current = saved.lastUpdated;
+            lastPulledTsRef.current = txRes.clientUpdatedAt;
+            setLastCloudSyncAt(Date.now());
+            setSyncStatus('synced');
+            setSyncError(null);
+          } catch (cloudErr) {
+            const msg = cloudErr instanceof Error ? cloudErr.message : String(cloudErr);
+            if (isFirestoreQuotaError(cloudErr)) {
+              handleCloudSyncFailure(cloudErr);
+              cloudPending = true;
+            } else if (isOfflineOrNetworkFailure(cloudErr, true)) {
+              cloudPending = true;
+            } else if (
+              msg.includes('tidak ditemukan di Firestore') ||
+              msg.includes('belum tersedia')
+            ) {
+              try {
+                await syncSummaryAndCandidatesToFirestore(user, saved);
+                setLastCloudSyncAt(Date.now());
+                setSyncStatus('synced');
+                setSyncError(null);
+              } catch (summaryErr) {
+                if (isFirestoreQuotaError(summaryErr)) {
+                  handleCloudSyncFailure(summaryErr);
+                  cloudPending = true;
+                }
+              }
+            } else {
+              console.warn('Firestore transaction warning:', msg);
+            }
+          } finally {
+            syncInFlightRef.current = false;
+          }
         }
 
         if (cloudPending) {
           const queuedReceipt = persistOfflineVote(
             targetVoter,
             candidateId,
-            serverRes.receipt,
+            receipt,
             { syncedServer: true, syncedFirestore: false }
           );
           notify(
             'info',
             'Suara Tersimpan & Antre Cloud',
-            'Suara tersimpan di server lokal dan akan otomatis tersinkron ke cloud saat internet tersambung.'
+            'Suara tersimpan di perangkat dan akan otomatis tersinkron ke Firebase saat kuota/koneksi tersedia.'
           );
           return queuedReceipt;
         }
 
         notify('success', 'Suara Tercatat', 'Terima kasih, suara sah Anda telah disimpan.');
-        return serverRes.receipt;
+        return receipt;
       }
 
-      // Network offline or Express server unreachable -> persist locally + queue for automatic online sync
+      // Case 2C: Network offline or Express server unreachable -> persist locally + queue for automatic online sync
       const offlineReceipt = persistOfflineVote(
         targetVoter,
         candidateId,
         null,
-        { syncedServer: false, syncedFirestore: false }
+        { syncedServer: !expressAvailable, syncedFirestore: false }
       );
       notify(
         'info',

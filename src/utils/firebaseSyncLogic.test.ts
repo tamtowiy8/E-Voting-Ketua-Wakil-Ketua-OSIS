@@ -386,3 +386,35 @@ test('applyDailyUsageDelta records opLabel in lastOp and estimateFirestoreStorag
   assert.deepEqual(logDiff.toDeleteIds, ['log_1']);
 });
 
+test('formatFirebaseAuthError gives actionable Netlify domain & popup guidance in Indonesian', async () => {
+  const {
+    formatFirebaseAuthError,
+    getFirebaseAuthSettingsUrl,
+    isUnauthorizedDomainAuthError,
+  } = await import('./firebaseSyncLogic');
+
+  const rawDomainErr = {
+    code: 'auth/unauthorized-domain',
+    message: 'Firebase: Error (auth/unauthorized-domain).',
+  };
+  assert.equal(isUnauthorizedDomainAuthError(rawDomainErr), true);
+  assert.equal(isUnauthorizedDomainAuthError(new Error('auth/popup-blocked')), false);
+
+  const domainMsg = formatFirebaseAuthError(rawDomainErr, 'evoting-sman1kabun.netlify.app');
+  assert.match(domainMsg, /evoting-sman1kabun\.netlify\.app/);
+  assert.match(domainMsg, /Authorized domains/i);
+  assert.equal(isUnauthorizedDomainAuthError(new Error(domainMsg)), false);
+
+  const popupMsg = formatFirebaseAuthError(new Error('Firebase: Error (auth/popup-blocked).'));
+  assert.match(popupMsg, /popup/i);
+
+  const closedMsg = formatFirebaseAuthError({ code: 'auth/popup-closed-by-user' });
+  assert.match(closedMsg, /ditutup/i);
+
+  const settingsUrl = getFirebaseAuthSettingsUrl('gen-lang-client-0680921408');
+  assert.equal(
+    settingsUrl,
+    'https://console.firebase.google.com/project/gen-lang-client-0680921408/authentication/settings'
+  );
+});
+

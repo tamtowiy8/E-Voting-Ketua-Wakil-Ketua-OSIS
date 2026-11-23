@@ -1,0 +1,3 @@
+/api/gas/proxy  /.netlify/functions/gas-proxy  200
+/api/tts        /.netlify/functions/tts        200
+/*              /index.html                    200

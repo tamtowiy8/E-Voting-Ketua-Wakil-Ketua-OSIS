@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import {
   buildWelcomeVoiceText,
   computeMaleSpeechParams,
   isLikelyFemaleVoiceName,
   isLikelyMaleVoiceName,
+  isValidRiffWaveBytes,
+  resolveStaticVoiceAssetUrl,
   selectPreferredIndonesianMaleVoice,
   VOTER_SAVED_VOICE_TEXT,
 } from './voiceNarrator';
@@ -22,6 +26,29 @@ test('buildWelcomeVoiceText formats exact greeting with configured school name a
 
 test('VOTER_SAVED_VOICE_TEXT matches exact required verification phrase', () => {
   assert.equal(VOTER_SAVED_VOICE_TEXT, 'Pilihanmu sudah tersimpan, terima kasih');
+});
+
+test('resolveStaticVoiceAssetUrl maps default welcome and confirmation phrases to bundled Gemini WAV files', () => {
+  const welcomePath = resolveStaticVoiceAssetUrl(buildWelcomeVoiceText('SMA Negeri 1 Kabun'));
+  const savedPath = resolveStaticVoiceAssetUrl(VOTER_SAVED_VOICE_TEXT);
+
+  assert.equal(welcomePath, '/assets/voice/welcome-smansakabun.wav');
+  assert.equal(savedPath, '/assets/voice/vote-saved.wav');
+  assert.equal(resolveStaticVoiceAssetUrl(buildWelcomeVoiceText('SMA Lain')), null);
+
+  for (const relPath of [welcomePath!, savedPath!]) {
+    const fullPath = path.resolve(process.cwd(), 'public', relPath.replace(/^\//, ''));
+    assert.equal(fs.existsSync(fullPath), true, `Missing static voice asset: ${fullPath}`);
+    const bytes = new Uint8Array(fs.readFileSync(fullPath));
+    assert.equal(isValidRiffWaveBytes(bytes), true, `Invalid WAV RIFF header: ${fullPath}`);
+  }
+});
+
+test('isValidRiffWaveBytes rejects HTML/SPA fallback responses and accepts RIFF WAVE bytes', () => {
+  const htmlBytes = new TextEncoder().encode('<!doctype html><html></html>');
+  assert.equal(isValidRiffWaveBytes(htmlBytes), false);
+  const riffBytes = new TextEncoder().encode('RIFF\x24\x00\x00\x00WAVEfmt ');
+  assert.equal(isValidRiffWaveBytes(riffBytes), true);
 });
 
 test('selectPreferredIndonesianMaleVoice prioritizes Indonesian male voices over female or foreign voices', () => {
@@ -61,3 +88,4 @@ test('computeMaleSpeechParams applies masculine pitch tuning for male and fallba
   assert.equal(fallbackParams.lang, 'id-ID');
   assert.ok(fallbackParams.pitch < maleVoiceParams.pitch);
 });
+

@@ -52,6 +52,7 @@ import {
   diffAuditLogsWithSyncCache,
   diffVotersWithSyncCache,
   FIRESTORE_CSV_BATCH_LIMIT,
+  formatFirebaseAuthError,
   getQuotaCooldownUntilMs,
   hasCandidateChanged,
   hasElectionSummaryChanged,
@@ -271,6 +272,9 @@ export async function googleSignIn(): Promise<{ user: User; accessToken: string 
     cachedAccessToken = credential.accessToken;
     await ensureUserProfile(result.user);
     return { user: result.user, accessToken: cachedAccessToken };
+  } catch (err) {
+    const host = typeof window !== 'undefined' ? window.location.hostname : '';
+    throw new Error(formatFirebaseAuthError(err, host));
   } finally {
     isSigningIn = false;
   }

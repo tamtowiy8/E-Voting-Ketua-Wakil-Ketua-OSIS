@@ -119,6 +119,10 @@ test('isOfflineVoteCompleted checks server and optional Firestore completion cle
     syncedServer: true,
     syncedFirestore: false,
   });
+  const firestoreOnlyStatic = makeQueueEntry(voter, 'paslon_1', {
+    syncedServer: false,
+    syncedFirestore: true,
+  });
   const bothDone = makeQueueEntry(voter, 'paslon_1', {
     syncedServer: true,
     syncedFirestore: true,
@@ -127,6 +131,10 @@ test('isOfflineVoteCompleted checks server and optional Firestore completion cle
   assert.equal(isOfflineVoteCompleted(serverOnly, false), true);
   assert.equal(isOfflineVoteCompleted(serverOnly, true), false);
   assert.equal(isOfflineVoteCompleted(bothDone, true), true);
+  // On static Netlify hosting (requireServerSync = false), completion only depends on Firestore
+  assert.equal(isOfflineVoteCompleted(firestoreOnlyStatic, true, false), true);
+  assert.equal(isOfflineVoteCompleted(serverOnly, true, false), false);
+  assert.equal(isOfflineVoteCompleted(serverOnly, false, false), true);
 });
 
 test('reconcilePendingVotesIntoDb merges un-synced offline votes without double counting', () => {

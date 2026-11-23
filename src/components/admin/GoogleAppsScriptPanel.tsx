@@ -27,6 +27,7 @@ import {
   generateGasManifestJson,
   isValidGasWebAppUrl,
 } from '../../utils/gasGenerator';
+import { isGasDevUrl } from '../../utils/safeJson';
 
 interface GoogleAppsScriptPanelProps {
   db: DatabaseState;
@@ -63,6 +64,7 @@ export function GoogleAppsScriptPanel({
     totalDpt?: number;
     totalCandidates?: number;
   } | null>(null);
+  const [gasError, setGasError] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmGasAction>(null);
 
   const [activeFile, setActiveFile] = useState<GasFileTab>('code');
@@ -107,6 +109,7 @@ export function GoogleAppsScriptPanel({
     }
 
     setTestingConn(true);
+    setGasError(null);
     try {
       const info = await gasPing(cleanUrl);
       setPingResult(info);
@@ -119,6 +122,7 @@ export function GoogleAppsScriptPanel({
     } catch (err) {
       setPingResult(null);
       const msg = err instanceof Error ? err.message : 'Gagal menghubungi Google Apps Script.';
+      setGasError(msg);
       onNotify('error', 'Koneksi Apps Script Gagal', msg);
     } finally {
       setTestingConn(false);
@@ -154,6 +158,7 @@ export function GoogleAppsScriptPanel({
     }
 
     setSyncBusy(true);
+    setGasError(null);
     try {
       if (confirmAction === 'PUSH_GAS') {
         await gasPushState(cleanUrl, db);
@@ -178,6 +183,7 @@ export function GoogleAppsScriptPanel({
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Operasi Google Apps Script gagal.';
+      setGasError(msg);
       onNotify('error', 'Sinkronisasi Apps Script Gagal', msg);
     } finally {
       setSyncBusy(false);
@@ -253,6 +259,7 @@ export function GoogleAppsScriptPanel({
               onChange={(e) => {
                 setUrlInput(e.target.value);
                 setPingResult(null);
+                setGasError(null);
               }}
               placeholder="https://script.google.com/macros/s/AKfycb.../exec"
               className="flex-1 h-11 px-3.5 rounded-xl border border-slate-300 text-xs font-mono"
@@ -276,6 +283,33 @@ export function GoogleAppsScriptPanel({
               )}
             </button>
           </div>
+          {isGasDevUrl(urlInput) && (
+            <div
+              role="alert"
+              className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-start gap-2"
+            >
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <span>
+                URL berakhiran <code className="font-mono font-bold">/dev</code> hanya untuk akun pembuat script
+                dan mengembalikan halaman HTML login. Ganti dengan URL Web App produksi berakhiran{' '}
+                <code className="font-mono font-bold">/exec</code> dari menu{' '}
+                <strong>Deploy &rarr; Manage deployments</strong>.
+              </span>
+            </div>
+          )}
+          {gasError && (
+            <div
+              id="gas-connection-error-banner"
+              role="alert"
+              className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 flex items-start gap-2.5"
+            >
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="space-y-1 flex-1">
+                <p className="font-bold text-rose-950">Koneksi Google Apps Script Gagal</p>
+                <p className="leading-relaxed">{gasError}</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">

@@ -90,6 +90,41 @@ export function getFirestoreUsageUrl(projectId: string, databaseId: string): str
   return `https://console.firebase.google.com/project/${safeProject}/firestore/databases/${safeDb}/usage`;
 }
 
+export function getFirebaseAuthSettingsUrl(projectId: string): string {
+  const safeProject = encodeURIComponent(projectId.trim());
+  return `https://console.firebase.google.com/project/${safeProject}/authentication/settings`;
+}
+
+export function isUnauthorizedDomainAuthError(error: unknown): boolean {
+  const raw = extractRawErrorText(error).toLowerCase();
+  return raw.includes('auth/unauthorized-domain') || raw.includes('unauthorized-domain');
+}
+
+export function formatFirebaseAuthError(error: unknown, currentHostname?: string): string {
+  const raw = extractRawErrorText(error);
+  const lower = raw.toLowerCase();
+  const host = (currentHostname || '').trim();
+
+  if (isUnauthorizedDomainAuthError(error)) {
+    return host
+      ? `Domain "${host}" belum didaftarkan di Firebase Authentication → Settings → Authorized domains. Buka Firebase Console, klik "Add domain", lalu masukkan "${host}" (tanpa https:// dan tanpa tanda *) agar Login Google & Firebase berfungsi di Netlify.`
+      : 'Domain situs ini belum didaftarkan di Firebase Authentication → Settings → Authorized domains. Tambahkan domain Netlify Anda (tanpa https:// dan tanpa *) di Firebase Console.';
+  }
+  if (lower.includes('auth/popup-blocked')) {
+    return 'Popup login Google diblokir oleh peramban. Izinkan jendela popup untuk situs ini lalu coba lagi.';
+  }
+  if (lower.includes('auth/popup-closed-by-user') || lower.includes('auth/cancelled-popup-request')) {
+    return 'Jendela login Google ditutup sebelum otorisasi selesai. Silakan coba lagi dan pilih akun Google panitia.';
+  }
+  if (lower.includes('auth/network-request-failed')) {
+    return 'Koneksi internet bermasalah saat menghubungi server autentikasi Google/Firebase. Periksa jaringan Anda lalu coba lagi.';
+  }
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return 'Gagal masuk dengan akun Google.';
+}
+
 /**
  * Google Cloud / Firebase daily quotas reset at midnight Pacific Time (08:00 UTC in PST).
  * Returns the next 08:00 UTC timestamp after `nowMs`.
