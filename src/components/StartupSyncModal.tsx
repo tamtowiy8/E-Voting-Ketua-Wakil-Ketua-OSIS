@@ -12,11 +12,11 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react';
-import { FIRESTORE_PROJECT_ID } from '../services/firebaseClient';
 import { isValidGasWebAppUrl } from '../utils/gasGenerator';
 import { isGasDevUrl } from '../utils/safeJson';
 import {
   DEFAULT_GAS_WEB_APP_URL,
+  FIREBASE_PROJECT_ID,
   MASKED_SYNC_EMAIL_BAR,
   type StartupSyncStep,
 } from '../utils/startupSyncConfig';
@@ -50,7 +50,7 @@ export function StartupSyncModal({
   useEffect(() => {
     if (step === 'GAS') {
       setGasError(null);
-      setGasUrlInput((prev) => (prev.trim() ? prev : DEFAULT_GAS_WEB_APP_URL));
+      setGasUrlInput(DEFAULT_GAS_WEB_APP_URL);
     } else if (step === 'FIREBASE') {
       setFirebaseError(null);
     }
@@ -245,7 +245,7 @@ export function StartupSyncModal({
                         )}
                       </button>
                       <a
-                        href={`https://console.firebase.google.com/project/${FIRESTORE_PROJECT_ID}/authentication/settings`}
+                        href={`https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/authentication/settings`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-[11px] font-bold"

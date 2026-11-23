@@ -58,9 +58,7 @@ import {
 import { isValidGasWebAppUrl } from './utils/gasGenerator';
 import {
   DEFAULT_SYNC_EMAIL,
-  loadStartupSyncDismissed,
   resolveStartupSyncStep,
-  saveStartupSyncDismissed,
 } from './utils/startupSyncConfig';
 import {
   apiCastVote,
@@ -235,10 +233,11 @@ function AppContent() {
 
   const [gasConfigState, setGasConfigState] = useState<GasConfig>(() => loadGasConfig());
   const [firebaseVerifiedInWizard, setFirebaseVerifiedInWizard] = useState(false);
-  const [startupDismissed, setStartupDismissed] = useState(() => loadStartupSyncDismissed());
+  const [startupDismissed, setStartupDismissed] = useState(false);
 
   const {
     user,
+    accessToken,
     authReady,
     autoSyncEnabled,
     setAutoSyncEnabled,
@@ -252,6 +251,19 @@ function AppContent() {
     clearQuotaLockAndEnableNetwork,
     signInWithGoogle,
   } = useFirebaseAuth();
+
+  const prevFirebaseUidRef = useRef<string | null>(null);
+  const prevAccessTokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const nextUid = user?.uid ?? null;
+    const newlySignedIn = !prevFirebaseUidRef.current && Boolean(nextUid);
+    const newlyAuthorizedSheets = !prevAccessTokenRef.current && Boolean(accessToken);
+    if ((newlySignedIn || newlyAuthorizedSheets) && !isValidGasWebAppUrl(gasConfigState.webAppUrl)) {
+      setStartupDismissed(false);
+    }
+    prevFirebaseUidRef.current = nextUid;
+    prevAccessTokenRef.current = accessToken;
+  }, [user?.uid, accessToken, gasConfigState.webAppUrl]);
 
   const dbRef = useRef(db);
   dbRef.current = db;
@@ -1474,8 +1486,13 @@ function AppContent() {
   const handleStartupConfirmFirebase = async () => {
     const res = await signInWithGoogle(DEFAULT_SYNC_EMAIL);
     setAutoSyncEnabled(true);
-    await clearQuotaLockAndEnableNetwork();
     setFirebaseVerifiedInWizard(true);
+    setStartupDismissed(false);
+    try {
+      await clearQuotaLockAndEnableNetwork();
+    } catch {
+      // Ignore offline/network re-enable error during startup transition
+    }
     notify(
       'success',
       'Google Sheets & Firebase Terhubung',
@@ -1511,7 +1528,6 @@ function AppContent() {
 
   const handleStartupDismiss = () => {
     setStartupDismissed(true);
-    saveStartupSyncDismissed(true);
   };
 
   return (

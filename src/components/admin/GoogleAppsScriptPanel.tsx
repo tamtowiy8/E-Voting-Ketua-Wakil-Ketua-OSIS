@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -28,6 +28,7 @@ import {
   isValidGasWebAppUrl,
 } from '../../utils/gasGenerator';
 import { isGasDevUrl } from '../../utils/safeJson';
+import { DEFAULT_GAS_WEB_APP_URL } from '../../utils/startupSyncConfig';
 
 interface GoogleAppsScriptPanelProps {
   db: DatabaseState;
@@ -56,8 +57,23 @@ export function GoogleAppsScriptPanel({
   onNotify,
 }: GoogleAppsScriptPanelProps) {
   const [config, setConfig] = useState(() => loadGasConfig());
-  const [urlInput, setUrlInput] = useState(config.webAppUrl);
+  const [urlInput, setUrlInput] = useState(
+    () => loadGasConfig().webAppUrl || DEFAULT_GAS_WEB_APP_URL
+  );
   const [testingConn, setTestingConn] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<typeof config>;
+      const next = custom.detail || loadGasConfig();
+      setConfig(next);
+      if (next.webAppUrl) {
+        setUrlInput(next.webAppUrl);
+      }
+    };
+    window.addEventListener('osis-gas-config-change', handler);
+    return () => window.removeEventListener('osis-gas-config-change', handler);
+  }, []);
   const [syncBusy, setSyncBusy] = useState(false);
   const [pingResult, setPingResult] = useState<{
     schoolName?: string;

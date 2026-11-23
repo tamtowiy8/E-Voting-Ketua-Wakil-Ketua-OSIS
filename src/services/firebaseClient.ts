@@ -277,7 +277,11 @@ export async function googleSignIn(
       throw new Error('Gagal mendapatkan token akses Google Sheets dari sesi masuk.');
     }
     cachedAccessToken = credential.accessToken;
-    await ensureUserProfile(result.user);
+    try {
+      await ensureUserProfile(result.user);
+    } catch (profileErr) {
+      console.warn('Non-fatal ensureUserProfile warning during sign-in:', profileErr);
+    }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (err) {
     const host = typeof window !== 'undefined' ? window.location.hostname : '';
