@@ -46,7 +46,7 @@ interface FirebaseContextValue {
   cloudSummary: CloudElectionSummary | null;
   setCloudSummary: (summary: CloudElectionSummary | null) => void;
   clearQuotaLockAndEnableNetwork: () => Promise<void>;
-  signInWithGoogle: () => Promise<{ user: User; accessToken: string }>;
+  signInWithGoogle: (loginHint?: string) => Promise<{ user: User; accessToken: string }>;
   signOutGoogle: () => Promise<void>;
 }
 
@@ -111,10 +111,10 @@ export function FirebaseProvider({ children }: { children: ReactNode }) {
     await resetFirestoreQuotaAndEnableNetwork();
   };
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (loginHint?: string) => {
     setIsSigningIn(true);
     try {
-      const result = await googleSignIn();
+      const result = await googleSignIn(loginHint);
       setUser(result.user);
       setAccessToken(result.accessToken);
       return result;

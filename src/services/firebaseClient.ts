@@ -261,9 +261,16 @@ export function initAuthListener(
   });
 }
 
-export async function googleSignIn(): Promise<{ user: User; accessToken: string }> {
+export async function googleSignIn(
+  loginHint?: string
+): Promise<{ user: User; accessToken: string }> {
   try {
     isSigningIn = true;
+    const customParams: Record<string, string> = { prompt: 'select_account' };
+    if (loginHint && loginHint.trim()) {
+      customParams.login_hint = loginHint.trim();
+    }
+    googleProvider.setCustomParameters(customParams);
     const result = await signInWithPopup(auth, googleProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {

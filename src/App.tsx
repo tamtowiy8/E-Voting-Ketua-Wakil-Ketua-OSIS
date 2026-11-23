@@ -7,6 +7,7 @@ import { LoadingOverlay } from './components/LoadingOverlay';
 import { LoginPortal } from './components/LoginPortal';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { SplashIntro } from './components/SplashIntro';
+import { StartupSyncModal } from './components/StartupSyncModal';
 import { ToastContainer } from './components/ToastContainer';
 import { VoterPortal } from './components/VoterPortal';
 import { FirebaseProvider, useFirebaseAuth } from './context/FirebaseContext';
@@ -48,12 +49,19 @@ import {
   isFirestoreQuotaError,
 } from './utils/firebaseSyncLogic';
 import {
+  gasPing,
   gasPushState,
   loadGasConfig,
   saveGasConfig,
   type GasConfig,
 } from './utils/gasClient';
 import { isValidGasWebAppUrl } from './utils/gasGenerator';
+import {
+  DEFAULT_SYNC_EMAIL,
+  loadStartupSyncDismissed,
+  resolveStartupSyncStep,
+  saveStartupSyncDismissed,
+} from './utils/startupSyncConfig';
 import {
   apiCastVote,
   apiEditVoter,
@@ -225,10 +233,15 @@ function AppContent() {
     loadPendingOfflineVotes()
   );
 
+  const [gasConfigState, setGasConfigState] = useState<GasConfig>(() => loadGasConfig());
+  const [firebaseVerifiedInWizard, setFirebaseVerifiedInWizard] = useState(false);
+  const [startupDismissed, setStartupDismissed] = useState(() => loadStartupSyncDismissed());
+
   const {
     user,
     authReady,
     autoSyncEnabled,
+    setAutoSyncEnabled,
     setSyncStatus,
     setLastCloudSyncAt,
     setSyncError,
@@ -236,6 +249,8 @@ function AppContent() {
     setQuotaExceeded,
     cloudSummary,
     setCloudSummary,
+    clearQuotaLockAndEnableNetwork,
+    signInWithGoogle,
   } = useFirebaseAuth();
 
   const dbRef = useRef(db);
@@ -315,10 +330,16 @@ function AppContent() {
     const unsubServer = initServerSync((remoteDb) => {
       setDb(reconcilePendingVotesIntoDb(remoteDb, loadPendingOfflineVotes()));
     });
+    const handleGasConfigChange = (e: Event) => {
+      const custom = e as CustomEvent<GasConfig>;
+      setGasConfigState(custom.detail || loadGasConfig());
+    };
+    window.addEventListener('osis-gas-config-change', handleGasConfigChange);
     return () => {
       unsubQueue();
       unsubStorage();
       unsubServer();
+      window.removeEventListener('osis-gas-config-change', handleGasConfigChange);
     };
   }, []);
 
@@ -1440,6 +1461,59 @@ function AppContent() {
     });
   }, []);
 
+  const startupStep =
+    !showIntro && authReady
+      ? resolveStartupSyncStep({
+          hasFirebaseConnection: Boolean(user),
+          gasWebAppUrl: gasConfigState.webAppUrl,
+          firebaseVerifiedInWizard,
+          dismissedForSession: startupDismissed,
+        })
+      : null;
+
+  const handleStartupConfirmFirebase = async () => {
+    const res = await signInWithGoogle(DEFAULT_SYNC_EMAIL);
+    setAutoSyncEnabled(true);
+    await clearQuotaLockAndEnableNetwork();
+    setFirebaseVerifiedInWizard(true);
+    notify(
+      'success',
+      'Google Sheets & Firebase Terhubung',
+      `Akun ${res.user.displayName || 'pengelola'} terverifikasi. Lanjutkan konfirmasi Google Apps Script.`
+    );
+  };
+
+  const handleStartupConfirmGas = async (url: string, skipPing = false) => {
+    const cleanUrl = url.trim();
+    let pingSchool = dbRef.current.settings.schoolName;
+    if (!skipPing) {
+      const info = await gasPing(cleanUrl);
+      if (info.schoolName) {
+        pingSchool = info.schoolName;
+      }
+    }
+    const nextGasConfig: GasConfig = {
+      webAppUrl: cleanUrl,
+      autoSync: true,
+      lastSyncedAt: skipPing ? null : Date.now(),
+    };
+    saveGasConfig(nextGasConfig);
+    setGasConfigState(nextGasConfig);
+    window.dispatchEvent(new CustomEvent('osis-gas-config-change', { detail: nextGasConfig }));
+    notify(
+      'success',
+      'Backend Apps Script Terhubung',
+      skipPing
+        ? 'URL Web App Google Apps Script berhasil disimpan dan sinkronisasi otomatis diaktifkan.'
+        : `Spreadsheet "${pingSchool}" terhubung ke Google Apps Script.`
+    );
+  };
+
+  const handleStartupDismiss = () => {
+    setStartupDismissed(true);
+    saveStartupSyncDismissed(true);
+  };
+
   return (
     <>
       <GasAutoSyncController db={db} />
@@ -1450,6 +1524,14 @@ function AppContent() {
           onComplete={handleSplashComplete}
         />
       )}
+
+      <StartupSyncModal
+        step={startupStep}
+        firebaseVerified={Boolean(user) || firebaseVerifiedInWizard}
+        onConfirmFirebase={handleStartupConfirmFirebase}
+        onConfirmGas={handleStartupConfirmGas}
+        onDismiss={handleStartupDismiss}
+      />
 
       {view === 'MONITOR' && (
         <LiveMonitor
