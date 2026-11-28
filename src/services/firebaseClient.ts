@@ -239,7 +239,7 @@ async function testConnection(): Promise<void> {
   }
 }
 
-if (!isQuotaCooldownActive(loadQuotaCooldownUntil())) {
+if (!isQuotaCooldownActive(loadQuotaCooldownUntil()) && auth.currentUser) {
   void testConnection();
 }
 
@@ -364,6 +364,7 @@ export interface CloudElectionSummary {
   gradeVoted?: Record<string, number>;
   clientUpdatedAt: number;
   status: 'draft' | 'active' | 'closed';
+  isLocalOptimistic?: boolean;
 }
 
 export async function ensureUserProfile(user: User, force = false): Promise<void> {
@@ -1100,7 +1101,7 @@ export async function importCsvVotersToFirestore(
   });
 
   try {
-    // 1 read to ensure parent election doc exists before writing voter subcollection docs
+    // 1 read to ensure parent election doc exists before writing summary/candidates/voters
     const summarySnap = await getDoc(electionRef);
     recordFirestoreQuotaOps({ reads: 1 }, 'Import CSV Pemilih (Batch ≤450)');
     if (!summarySnap.exists()) {
@@ -1114,34 +1115,8 @@ export async function importCsvVotersToFirestore(
       recordFirestoreQuotaOps({ writes: 1 }, 'Import CSV Pemilih (Batch ≤450)');
     }
 
-    // Chunk voter writes at <= 450 operations per batch (e.g. 999 voters -> 3 batches)
-    const voterBatches = chunkIntoBatches(cappedVoters, FIRESTORE_CSV_BATCH_LIMIT);
-    let batchCount = 0;
-
-    for (const chunk of voterBatches) {
-      const batch = writeBatch(firestoreDb);
-      for (const v of chunk) {
-        const voterDocId = sanitizeDocId(getVoterDocIdFromNis(v.nis), 'vtr');
-        const voterRef = doc(firestoreDb, 'elections', electionId, 'voters', voterDocId);
-        batch.set(voterRef, {
-          id: voterDocId,
-          electionId,
-          ownerId: uid,
-          nis: clampString(v.nis, 40, '000000'),
-          name: clampString(v.name, 120, 'Siswa'),
-          kelas: clampString(v.kelas, 60, 'X'),
-          grade: (['X', 'XI', 'XII'].includes(v.grade) ? v.grade : 'X') as GradeLevel,
-          hasVoted: false,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-      await runFirestoreWrite(() => batch.commit());
-      recordFirestoreQuotaOps({ writes: chunk.length }, 'Import CSV Pemilih (Batch ≤450)');
-      batchCount += 1;
-    }
-
-    // Read only small candidates collection (~2-4 docs, never voters) so votes reset cleanly to 0
+    // Read small candidates collection (~2-4 docs) and reset summary + candidates FIRST
+    // so live monitors/portals immediately reflect totalVoted: 0 even before voter batches complete.
     const existingCandsSnap = await getDocs(
       query(
         collection(firestoreDb, 'elections', electionId, 'candidates'),
@@ -1154,8 +1129,8 @@ export async function importCsvVotersToFirestore(
     );
     const existingCandIds = new Set(existingCandsSnap.docs.map((d) => d.id));
 
-    const finalBatch = writeBatch(firestoreDb);
-    let finalOps = 0;
+    const summaryFirstBatch = writeBatch(firestoreDb);
+    let summaryBatchOps = 0;
 
     for (const c of resetCandidates) {
       const cid = sanitizeDocId(c.id, 'cand');
@@ -1180,14 +1155,14 @@ export async function importCsvVotersToFirestore(
         updatedAt: serverTimestamp(),
       };
       if (!existingCandIds.has(cid)) {
-        finalBatch.set(candRef, { ...candPayload, createdAt: serverTimestamp() });
+        summaryFirstBatch.set(candRef, { ...candPayload, createdAt: serverTimestamp() });
       } else {
-        finalBatch.set(candRef, candPayload, { merge: true });
+        summaryFirstBatch.set(candRef, candPayload, { merge: true });
       }
-      finalOps += 1;
+      summaryBatchOps += 1;
     }
 
-    finalBatch.set(
+    summaryFirstBatch.set(
       electionRef,
       {
         ...summaryBase,
@@ -1195,11 +1170,37 @@ export async function importCsvVotersToFirestore(
       },
       { merge: true }
     );
-    finalOps += 1;
+    summaryBatchOps += 1;
 
-    await runFirestoreWrite(() => finalBatch.commit());
-    recordFirestoreQuotaOps({ writes: finalOps }, 'Import CSV Pemilih (Batch ≤450)');
-    batchCount += 1;
+    await runFirestoreWrite(() => summaryFirstBatch.commit());
+    recordFirestoreQuotaOps({ writes: summaryBatchOps }, 'Import CSV Pemilih (Batch ≤450)');
+
+    // Chunk voter writes at <= 450 operations per batch (e.g. 999 voters -> 3 batches)
+    const voterBatches = chunkIntoBatches(cappedVoters, FIRESTORE_CSV_BATCH_LIMIT);
+    let batchCount = 1;
+
+    for (const chunk of voterBatches) {
+      const batch = writeBatch(firestoreDb);
+      for (const v of chunk) {
+        const voterDocId = sanitizeDocId(getVoterDocIdFromNis(v.nis), 'vtr');
+        const voterRef = doc(firestoreDb, 'elections', electionId, 'voters', voterDocId);
+        batch.set(voterRef, {
+          id: voterDocId,
+          electionId,
+          ownerId: uid,
+          nis: clampString(v.nis, 40, '000000'),
+          name: clampString(v.name, 120, 'Siswa'),
+          kelas: clampString(v.kelas, 60, 'X'),
+          grade: (['X', 'XI', 'XII'].includes(v.grade) ? v.grade : 'X') as GradeLevel,
+          hasVoted: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+      await runFirestoreWrite(() => batch.commit());
+      recordFirestoreQuotaOps({ writes: chunk.length }, 'Import CSV Pemilih (Batch ≤450)');
+      batchCount += 1;
+    }
 
     recordWorkspaceCsvImportCache(
       electionId,
@@ -1562,15 +1563,44 @@ export async function syncSummaryAndCandidatesToFirestore(
       opsWrites += 1;
     }
 
+    const existingData = existingSnap.exists()
+      ? (existingSnap.data() as Record<string, unknown>)
+      : undefined;
+    const isPartiallyHydratedClient = Boolean(
+      existingData &&
+        typeof existingData.totalDpt === 'number' &&
+        existingData.totalDpt > dbState.voters.length &&
+        dbState.voters.length <= DPT_DISPLAY_LIMIT
+    );
+    const effectiveSummaryPayload = isPartiallyHydratedClient && existingData
+      ? {
+          ...summaryBase,
+          totalDpt: clampInt(Math.max(Number(existingData.totalDpt), summaryBase.totalDpt), 0, 50000),
+          totalVoted: clampInt(
+            Math.max(Number(existingData.totalVoted ?? 0), summaryBase.totalVoted),
+            0,
+            50000
+          ),
+          gradeTotals:
+            existingData.gradeTotals && typeof existingData.gradeTotals === 'object'
+              ? (existingData.gradeTotals as Record<string, number>)
+              : summaryBase.gradeTotals,
+          gradeVoted:
+            existingData.gradeVoted && typeof existingData.gradeVoted === 'object'
+              ? (existingData.gradeVoted as Record<string, number>)
+              : summaryBase.gradeVoted,
+        }
+      : summaryBase;
+
     if (
       existingSnap.exists() &&
       (opsWrites + opsDeletes > 0 ||
-        hasElectionSummaryChanged(existingSnap.data() as Record<string, unknown>, summaryBase))
+        hasElectionSummaryChanged(existingData, effectiveSummaryPayload))
     ) {
       batch.set(
         electionRef,
         {
-          ...summaryBase,
+          ...effectiveSummaryPayload,
           updatedAt: serverTimestamp(),
         },
         { merge: true }

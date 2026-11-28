@@ -389,7 +389,7 @@ function readDatabaseState_() {
     voters: voters,
     admins: admins,
     auditLogs: auditLogs,
-    lastUpdated: Number(sMap.lastUpdated || Date.now())
+    lastUpdated: Number(sMap.lastUpdated) || 0
   };
 }
 
@@ -497,6 +497,8 @@ function doPost(e) {
 function getPublicBootstrap() {
   var db = readDatabaseState_();
   var votedCount = db.voters.filter(function (v) { return v.hasVoted; }).length;
+  var candVoteSum = (db.candidates || []).reduce(function (s, c) { return s + Number(c.votes || 0); }, 0);
+  var totalVoted = Math.max(votedCount, candVoteSum);
   return {
     settings: db.settings,
     candidates: db.candidates,
@@ -504,8 +506,8 @@ function getPublicBootstrap() {
       return { id: v.id, nis: v.nis, name: v.name, kelas: v.kelas, grade: v.grade, hasVoted: v.hasVoted };
     }),
     stats: {
-      totalDpt: db.voters.length,
-      totalVoted: votedCount
+      totalDpt: Math.max(db.voters.length, totalVoted),
+      totalVoted: totalVoted
     },
     lastUpdated: db.lastUpdated
   };
@@ -1298,11 +1300,12 @@ export function generateGasIndexHtml(db: DatabaseState, assetBaseUrl?: string): 
     // 2. STATISTICS ENGINE (Matches AI Studio computeStatistics)
     // =========================================================================
     function computeStats(voters, candidates) {
-      var totalDpt = (voters || []).length;
-      var totalVoted = (voters || []).filter(function (v) { return v.hasVoted; }).length;
-      var totalNotVoted = Math.max(0, totalDpt - totalVoted);
-      var participationRate = totalDpt > 0 ? Math.round((totalVoted / totalDpt) * 1000) / 10 : 0;
       var totalValidVotes = (candidates || []).reduce(function (s, c) { return s + Number(c.votes || 0); }, 0);
+      var rawTotalVoted = (voters || []).filter(function (v) { return v.hasVoted; }).length;
+      var totalVoted = Math.max(rawTotalVoted, totalValidVotes);
+      var totalDpt = Math.max((voters || []).length, totalVoted);
+      var totalNotVoted = Math.max(0, totalDpt - totalVoted);
+      var participationRate = totalDpt > 0 ? Math.round(Math.min(100, (totalVoted / totalDpt) * 100) * 10) / 10 : 0;
       var candidateStats = (candidates || []).slice().sort(function (a, b) {
         return Number(a.nomorUrut) - Number(b.nomorUrut);
       }).map(function (c) {

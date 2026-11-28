@@ -19,6 +19,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useFirebaseAuth } from '../context/FirebaseContext';
+import { SEED_TIMESTAMP } from '../data/seedData';
 import type {
   AdminUser,
   Candidate,
@@ -30,10 +31,12 @@ import {
   canAccessAdminTab,
   computeStatistics,
   type AdminPanelTab,
+  type SummaryStatsOverride,
   type VoterEditPayload,
 } from '../utils/electionLogic';
 import { downloadElectionResultPdf } from '../utils/pdfReport';
 import { loadPersistedAdminTab, savePersistedAdminTab } from '../utils/projectorMode';
+import { resolveEffectiveSummaryOverride } from '../utils/syncArbitration';
 import { useFullscreen } from '../utils/useFullscreen';
 import { AuditLogPanel } from './admin/AuditLogPanel';
 import { CandidateManager } from './admin/CandidateManager';
@@ -49,6 +52,7 @@ type AdminTab = AdminPanelTab;
 interface AdminPanelProps {
   db: DatabaseState;
   currentAdmin: AdminUser;
+  summaryOverride?: SummaryStatsOverride | null;
   onUpdateVoters: (nextVoters: Voter[], action: string, detail: string) => void;
   onImportCsvVoters?: (importedVoters: Voter[], skippedCount: number, warnings: string[]) => Promise<void> | void;
   onEditVoter: (voterId: string, payload: VoterEditPayload) => boolean;
@@ -67,6 +71,7 @@ interface AdminPanelProps {
 export function AdminPanel({
   db,
   currentAdmin,
+  summaryOverride,
   onUpdateVoters,
   onImportCsvVoters,
   onEditVoter,
@@ -97,10 +102,20 @@ export function AdminPanel({
     savePersistedAdminTab(activeTab);
   }, [activeTab]);
 
-  const { user, syncStatus, quotaExceeded, cloudSummary } = useFirebaseAuth();
+  const { user, syncStatus, quotaExceeded, autoSyncEnabled, cloudSummary } = useFirebaseAuth();
 
   const isSuperAdmin = currentAdmin.role === 'SUPERADMIN';
-  const stats = computeStatistics(db.voters, db.candidates, cloudSummary);
+  const effectiveSummary =
+    summaryOverride !== undefined
+      ? summaryOverride
+      : resolveEffectiveSummaryOverride({
+          db,
+          cloudSummary,
+          autoSyncEnabled,
+          quotaExceeded,
+          seedTimestamp: SEED_TIMESTAMP,
+        });
+  const stats = computeStatistics(db.voters, db.candidates, effectiveSummary);
 
   useEffect(() => {
     if (!canAccessAdminTab(currentAdmin.role, activeTab)) {
@@ -131,7 +146,8 @@ export function AdminPanel({
     try {
       const filename = await downloadElectionResultPdf(
         dbRef.current,
-        `${currentAdmin.fullName} (${currentAdmin.role})`
+        `${currentAdmin.fullName} (${currentAdmin.role})`,
+        effectiveSummary
       );
       onNotify('success', 'Laporan PDF Diunduh', `File ${filename} berhasil disimpan.`);
     } catch (err) {
@@ -548,7 +564,7 @@ export function AdminPanel({
       {showPdfPreviewModal && (
         <PdfReportPreviewModal
           db={db}
-          summaryOverride={cloudSummary}
+          summaryOverride={effectiveSummary}
           exportedBy={`${currentAdmin.fullName} (${currentAdmin.role})`}
           isExportingPdf={isExportingPdf}
           onConfirmDownload={handleConfirmDownloadPdf}

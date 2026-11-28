@@ -101,3 +101,13 @@ test('StartupSyncModal renders masked *************** email bar in Step 1 and pr
   assert.ok(step2Html.includes(DEFAULT_GAS_WEB_APP_URL));
   assert.match(step2Html, /Konfirmasi &amp; Hubungkan/);
 });
+
+test('App.tsx does not mount StartupSyncModal so synchronization runs automatically from startup', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const appSource = fs.readFileSync(path.resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
+  assert.equal(appSource.includes('<StartupSyncModal'), false);
+  assert.equal(appSource.includes('resolveStartupSyncStep'), false);
+  assert.match(appSource, /GasAutoSyncController/);
+  assert.match(appSource, /gasPullState/);
+});

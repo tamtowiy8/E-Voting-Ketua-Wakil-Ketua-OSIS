@@ -7,30 +7,64 @@ import {
   stripBomAndTrim,
 } from './safeJson';
 
+import { DEFAULT_GAS_WEB_APP_URL } from './startupSyncConfig';
+
 export const GAS_CONFIG_KEY = 'osis_evoting_gas_config_v1';
 
 export interface GasConfig {
   webAppUrl: string;
   autoSync: boolean;
   lastSyncedAt: number | null;
+  userDisabledAutoSync?: boolean;
+}
+
+export function normalizeGasConfig(raw: Partial<GasConfig> | null | undefined): GasConfig {
+  if (!raw || typeof raw !== 'object') {
+    return {
+      webAppUrl: DEFAULT_GAS_WEB_APP_URL,
+      autoSync: true,
+      lastSyncedAt: null,
+      userDisabledAutoSync: false,
+    };
+  }
+
+  const rawUrl = typeof raw.webAppUrl === 'string' ? raw.webAppUrl.trim() : '';
+  const hasUrl = rawUrl.length > 0;
+  const userDisabled = Boolean(raw.userDisabledAutoSync);
+
+  if (!hasUrl) {
+    return {
+      webAppUrl: DEFAULT_GAS_WEB_APP_URL,
+      autoSync: !userDisabled,
+      lastSyncedAt: typeof raw.lastSyncedAt === 'number' ? raw.lastSyncedAt : null,
+      userDisabledAutoSync: userDisabled,
+    };
+  }
+
+  return {
+    webAppUrl: rawUrl,
+    autoSync: userDisabled ? false : raw.autoSync === false ? false : true,
+    lastSyncedAt: typeof raw.lastSyncedAt === 'number' ? raw.lastSyncedAt : null,
+    userDisabledAutoSync: userDisabled,
+  };
 }
 
 export function loadGasConfig(): GasConfig {
+  if (typeof window === 'undefined') {
+    return normalizeGasConfig(null);
+  }
   try {
     const raw = window.localStorage.getItem(GAS_CONFIG_KEY);
-    if (!raw) return { webAppUrl: '', autoSync: false, lastSyncedAt: null };
+    if (!raw) return normalizeGasConfig(null);
     const parsed = JSON.parse(raw) as Partial<GasConfig>;
-    return {
-      webAppUrl: typeof parsed.webAppUrl === 'string' ? parsed.webAppUrl : '',
-      autoSync: Boolean(parsed.autoSync),
-      lastSyncedAt: typeof parsed.lastSyncedAt === 'number' ? parsed.lastSyncedAt : null,
-    };
+    return normalizeGasConfig(parsed);
   } catch {
-    return { webAppUrl: '', autoSync: false, lastSyncedAt: null };
+    return normalizeGasConfig(null);
   }
 }
 
 export function saveGasConfig(config: GasConfig): void {
+  if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(GAS_CONFIG_KEY, JSON.stringify(config));
   } catch {

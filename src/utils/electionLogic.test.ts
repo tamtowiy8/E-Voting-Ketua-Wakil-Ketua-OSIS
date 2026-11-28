@@ -636,3 +636,48 @@ test('formatCameraPermissionError provides clear guidance for permission denied,
   assert.match(formatCameraPermissionError('NotReadableError', false), /sedang digunakan aplikasi lain/i);
   assert.match(formatCameraPermissionError('UnknownError', false), /tidak dapat diakses/i);
 });
+
+test('computeStatistics ensures totalVoted always reflects candidate votes shown in bar and donut charts when voter flags are partial or zero', () => {
+  const unflaggedVoters: Voter[] = sampleVoters.map((v) => ({
+    ...v,
+    hasVoted: false,
+    votedAt: undefined,
+    votedCandidateId: undefined,
+  }));
+  const candidatesWithVotes = [
+    { ...sampleState.candidates[0], votes: 40 },
+    { ...sampleState.candidates[1], votes: 137 },
+  ];
+
+  // Without summaryOverride (e.g. GAS sync / partial hydration / Express)
+  const statsLocal = computeStatistics(unflaggedVoters, candidatesWithVotes);
+  assert.equal(statsLocal.totalValidVotes, 177);
+  assert.equal(statsLocal.totalVoted, 177);
+  assert.equal(statsLocal.totalDpt, 177);
+  assert.equal(statsLocal.totalNotVoted, 0);
+  assert.equal(statsLocal.participationRate, 100);
+
+  // With realistic 535 DPT and candidate votes > flagged voters
+  const manyUnflagged = Array.from({ length: 535 }, (_, i) => ({
+    ...unflaggedVoters[0],
+    id: `v_${i}`,
+    nis: `${2026000 + i}`,
+  }));
+  const statsLarge = computeStatistics(manyUnflagged, candidatesWithVotes);
+  assert.equal(statsLarge.totalDpt, 535);
+  assert.equal(statsLarge.totalValidVotes, 177);
+  assert.equal(statsLarge.totalVoted, 177);
+  assert.equal(statsLarge.totalNotVoted, 358);
+
+  // With summaryOverride where totalVoted is stale/0 while candidateVotes/totalValidVotes have votes
+  const statsSummary = computeStatistics(manyUnflagged, candidatesWithVotes, {
+    totalDpt: 535,
+    totalVoted: 0,
+    totalValidVotes: 0,
+    candidateVotes: { c1: 40, c2: 137 },
+  });
+  assert.equal(statsSummary.totalValidVotes, 177);
+  assert.equal(statsSummary.totalVoted, 177);
+  assert.equal(statsSummary.totalNotVoted, 358);
+});
+

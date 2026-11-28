@@ -7,7 +7,6 @@ import { LoadingOverlay } from './components/LoadingOverlay';
 import { LoginPortal } from './components/LoginPortal';
 import { ScrollToTopButton } from './components/ScrollToTopButton';
 import { SplashIntro } from './components/SplashIntro';
-import { StartupSyncModal } from './components/StartupSyncModal';
 import { ToastContainer } from './components/ToastContainer';
 import { VoterPortal } from './components/VoterPortal';
 import { FirebaseProvider, useFirebaseAuth } from './context/FirebaseContext';
@@ -23,7 +22,6 @@ import {
   syncSummaryAndCandidatesToFirestore,
   upsertVotersBatchToFirestore,
   verifyVoterLoginInFirestore,
-  type CloudElectionSummary,
 } from './services/firebaseClient';
 import type {
   AdminUser,
@@ -49,17 +47,13 @@ import {
   isFirestoreQuotaError,
 } from './utils/firebaseSyncLogic';
 import {
-  gasPing,
+  gasPullState,
   gasPushState,
   loadGasConfig,
   saveGasConfig,
   type GasConfig,
 } from './utils/gasClient';
 import { isValidGasWebAppUrl } from './utils/gasGenerator';
-import {
-  DEFAULT_SYNC_EMAIL,
-  resolveStartupSyncStep,
-} from './utils/startupSyncConfig';
 import {
   apiCastVote,
   apiEditVoter,
@@ -77,6 +71,7 @@ import {
   initServerSync,
   loadAdminSession,
   loadDatabase,
+  normalizeDatabase,
   probeServerBackend,
   saveAdminSession,
   saveDatabase,
@@ -101,7 +96,14 @@ import {
   savePersistedPublicMonitor,
   shouldSkipSplashForProjector,
 } from './utils/projectorMode';
-import { applyThemeToDocument, DEFAULT_THEME, resolveTheme } from './utils/theme';
+import {
+  applyVoteDeltaToCloudSummary,
+  buildOptimisticCloudSummary,
+  mergeSummaryIntoDb,
+  resolveEffectiveSummaryOverride,
+  resolveGasSyncAction,
+} from './utils/syncArbitration';
+import { applyThemeToDocument, resolveTheme } from './utils/theme';
 import {
   buildWelcomeVoiceText,
   prefetchMaleVoice,
@@ -109,82 +111,6 @@ import {
 } from './utils/voiceNarrator';
 
 type ActiveView = 'LOGIN' | 'ADMIN_LOGIN' | 'VOTER' | 'ADMIN' | 'MONITOR';
-
-function mergeSummaryIntoDb(
-  current: DatabaseState,
-  summary: CloudElectionSummary,
-  pendingVotes: PendingOfflineVote[] = []
-): DatabaseState {
-  const resolvedTheme = resolveTheme({
-    presetId: summary.themePresetId || current.settings.theme?.presetId || DEFAULT_THEME.presetId,
-    primaryColor:
-      summary.themePrimaryColor ||
-      current.settings.theme?.primaryColor ||
-      DEFAULT_THEME.primaryColor,
-    secondaryColor:
-      summary.themeSecondaryColor ||
-      current.settings.theme?.secondaryColor ||
-      DEFAULT_THEME.secondaryColor,
-    accentColor:
-      summary.themeAccentColor ||
-      current.settings.theme?.accentColor ||
-      DEFAULT_THEME.accentColor,
-    surfaceMode:
-      summary.themeSurfaceMode ||
-      current.settings.theme?.surfaceMode ||
-      DEFAULT_THEME.surfaceMode,
-  });
-
-  const pendingFirestoreDelta = new Map<string, number>();
-  for (const item of pendingVotes) {
-    if (!item.syncedFirestore) {
-      pendingFirestoreDelta.set(
-        item.candidateId,
-        (pendingFirestoreDelta.get(item.candidateId) || 0) + 1
-      );
-    }
-  }
-
-  const nextCandidates = summary.candidateVotes
-    ? current.candidates.map((c) => {
-        const cloudVotes =
-          typeof summary.candidateVotes?.[c.id] === 'number'
-            ? summary.candidateVotes[c.id]
-            : c.votes;
-        return {
-          ...c,
-          votes: cloudVotes + (pendingFirestoreDelta.get(c.id) || 0),
-        };
-      })
-    : current.candidates;
-
-  return {
-    ...current,
-    settings: {
-      ...current.settings,
-      schoolName: summary.schoolName || current.settings.schoolName,
-      academicYear: summary.academicYear || current.settings.academicYear,
-      electionTitle: summary.electionTitle || current.settings.electionTitle,
-      logoUrl: summary.logoUrl || current.settings.logoUrl,
-      startTime: summary.startTime || current.settings.startTime,
-      endTime: summary.endTime || current.settings.endTime,
-      isBoothOpen: Boolean(summary.isBoothOpen),
-      hideLiveResults: Boolean(summary.hideLiveResults),
-      voterLoginMode:
-        summary.voterLoginMode === 'QR_CODE' ||
-        summary.voterLoginMode === 'BOTH' ||
-        summary.voterLoginMode === 'NISN'
-          ? summary.voterLoginMode
-          : current.settings.voterLoginMode || 'NISN',
-      theme: resolvedTheme,
-    },
-    candidates: nextCandidates,
-    lastUpdated:
-      typeof summary.clientUpdatedAt === 'number' && summary.clientUpdatedAt > 0
-        ? summary.clientUpdatedAt
-        : current.lastUpdated,
-  };
-}
 
 export default function App() {
   return (
@@ -227,20 +153,15 @@ function AppContent() {
   const [isRefreshingApp, setIsRefreshingApp] = useState(false);
   const refreshTimerRef = useRef<number | null>(null);
   const [localMutationCounter, setLocalMutationCounter] = useState(0);
+  const [immediateGasPushCounter, setImmediateGasPushCounter] = useState(0);
   const [pendingOfflineVotes, setPendingOfflineVotes] = useState<PendingOfflineVote[]>(() =>
     loadPendingOfflineVotes()
   );
 
-  const [gasConfigState, setGasConfigState] = useState<GasConfig>(() => loadGasConfig());
-  const [firebaseVerifiedInWizard, setFirebaseVerifiedInWizard] = useState(false);
-  const [startupDismissed, setStartupDismissed] = useState(false);
-
   const {
     user,
-    accessToken,
     authReady,
     autoSyncEnabled,
-    setAutoSyncEnabled,
     setSyncStatus,
     setLastCloudSyncAt,
     setSyncError,
@@ -248,22 +169,7 @@ function AppContent() {
     setQuotaExceeded,
     cloudSummary,
     setCloudSummary,
-    clearQuotaLockAndEnableNetwork,
-    signInWithGoogle,
   } = useFirebaseAuth();
-
-  const prevFirebaseUidRef = useRef<string | null>(null);
-  const prevAccessTokenRef = useRef<string | null>(null);
-  useEffect(() => {
-    const nextUid = user?.uid ?? null;
-    const newlySignedIn = !prevFirebaseUidRef.current && Boolean(nextUid);
-    const newlyAuthorizedSheets = !prevAccessTokenRef.current && Boolean(accessToken);
-    if ((newlySignedIn || newlyAuthorizedSheets) && !isValidGasWebAppUrl(gasConfigState.webAppUrl)) {
-      setStartupDismissed(false);
-    }
-    prevFirebaseUidRef.current = nextUid;
-    prevAccessTokenRef.current = accessToken;
-  }, [user?.uid, accessToken, gasConfigState.webAppUrl]);
 
   const dbRef = useRef(db);
   dbRef.current = db;
@@ -342,16 +248,10 @@ function AppContent() {
     const unsubServer = initServerSync((remoteDb) => {
       setDb(reconcilePendingVotesIntoDb(remoteDb, loadPendingOfflineVotes()));
     });
-    const handleGasConfigChange = (e: Event) => {
-      const custom = e as CustomEvent<GasConfig>;
-      setGasConfigState(custom.detail || loadGasConfig());
-    };
-    window.addEventListener('osis-gas-config-change', handleGasConfigChange);
     return () => {
       unsubQueue();
       unsubStorage();
       unsubServer();
-      window.removeEventListener('osis-gas-config-change', handleGasConfigChange);
     };
   }, []);
 
@@ -502,8 +402,8 @@ function AppContent() {
   // 1. Real-time Count: subscribe ONLY to the 1 summary document `elections/{electionId}` (NO voters/votes collection snapshot!)
   useEffect(() => {
     if (!authReady || !user || quotaExceeded) {
+      setCloudSummary(null);
       if (!authReady || !user) {
-        setCloudSummary(null);
         initialCandidatesFetchedUidRef.current = null;
       }
       return;
@@ -512,25 +412,41 @@ function AppContent() {
     const unsub = subscribeElectionWorkspace(
       user,
       (summary) => {
-        setCloudSummary(summary);
-        if (!summary) return;
+        if (!summary) {
+          setCloudSummary(null);
+          return;
+        }
 
+        const incomingTs =
+          typeof summary.clientUpdatedAt === 'number' && Number.isFinite(summary.clientUpdatedAt)
+            ? summary.clientUpdatedAt
+            : 0;
+        const localTs = dbRef.current.lastUpdated;
+
+        // Ignore stale cloud snapshots when local state is strictly newer
+        if (localTs !== SEED_TIMESTAMP && incomingTs > 0 && incomingTs < localTs) {
+          return;
+        }
+
+        setCloudSummary(summary);
         setSyncStatus('synced');
         setLastCloudSyncAt(Date.now());
         setSyncError(null);
+
+        const remoteIsNewer =
+          (localTs === SEED_TIMESTAMP && incomingTs > 0) || incomingTs > localTs;
 
         if (
           autoSyncEnabled &&
           !syncInFlightRef.current &&
           !quotaExceededRef.current &&
-          typeof summary.clientUpdatedAt === 'number' &&
-          summary.clientUpdatedAt > dbRef.current.lastUpdated &&
-          summary.clientUpdatedAt !== lastPulledTsRef.current &&
-          summary.clientUpdatedAt !== lastSyncedTsRef.current
+          remoteIsNewer &&
+          incomingTs !== lastPulledTsRef.current &&
+          incomingTs !== lastSyncedTsRef.current
         ) {
           const queueSnapshot = loadPendingOfflineVotes();
           const merged = reconcilePendingVotesIntoDb(
-            mergeSummaryIntoDb(dbRef.current, summary, queueSnapshot),
+            mergeSummaryIntoDb(dbRef.current, summary, queueSnapshot, resolveTheme),
             queueSnapshot
           );
           lastPulledTsRef.current = merged.lastUpdated;
@@ -865,11 +781,27 @@ function AppContent() {
             };
             setActiveVoterSnapshot(updatedVoter);
             const latestDb = loadDatabase();
+            const hasVoterInLatest = latestDb.voters.some((v) => v.id === updatedVoter.id);
+            const nextVoters = hasVoterInLatest
+              ? latestDb.voters.map((v) => (v.id === updatedVoter.id ? updatedVoter : v))
+              : [...latestDb.voters, updatedVoter];
             const nextCandidates = latestDb.candidates.map((c) =>
               c.id === candidateId ? { ...c, votes: c.votes + 1 } : c
             );
-            const saved = saveDatabase({ ...latestDb, candidates: nextCandidates }, true);
+            const saved = saveDatabase(
+              {
+                ...latestDb,
+                voters: nextVoters,
+                candidates: nextCandidates,
+                lastUpdated: txRes.clientUpdatedAt,
+              },
+              true
+            );
             setDb(saved);
+            setCloudSummary((prev) =>
+              applyVoteDeltaToCloudSummary(prev, updatedVoter, candidateId, txRes.clientUpdatedAt)
+            );
+            setImmediateGasPushCounter((c) => c + 1);
 
             const receipt: VoteReceipt = {
               receiptCode: `VOT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
@@ -950,6 +882,14 @@ function AppContent() {
           setDb(reconciledDb);
           const nextLocalTs = reconciledDb.lastUpdated;
           setLocalMutationCounter((c) => c + 1);
+          setImmediateGasPushCounter((c) => c + 1);
+          setCloudSummary((prev) =>
+            prev
+              ? reconciledDb.voters.length >= (prev.totalDpt || 0)
+                ? buildOptimisticCloudSummary(reconciledDb, user?.uid)
+                : applyVoteDeltaToCloudSummary(prev, targetVoter, candidateId, nextLocalTs)
+              : prev
+          );
 
           let cloudPending = false;
           if (user && !quotaExceeded) {
@@ -1011,6 +951,14 @@ function AppContent() {
         const saved = saveDatabase(reconciledDb);
         setDb(saved);
         setLocalMutationCounter((c) => c + 1);
+        setImmediateGasPushCounter((c) => c + 1);
+        setCloudSummary((prev) =>
+          prev
+            ? saved.voters.length >= (prev.totalDpt || 0)
+              ? buildOptimisticCloudSummary(saved, user?.uid)
+              : applyVoteDeltaToCloudSummary(prev, targetVoter, candidateId, saved.lastUpdated)
+            : prev
+        );
         setActiveVoterSnapshot({
           ...targetVoter,
           hasVoted: true,
@@ -1210,6 +1158,10 @@ function AppContent() {
       candidates: resetCandidates,
       auditLogs: nextLogs,
     });
+    setImmediateGasPushCounter((c) => c + 1);
+    if (user && autoSyncEnabled && !quotaExceeded) {
+      setCloudSummary(buildOptimisticCloudSummary(saved, user.uid));
+    }
     void apiRestoreDatabase(saved);
 
     if (user && autoSyncEnabled && !quotaExceeded) {
@@ -1235,6 +1187,13 @@ function AppContent() {
     const prevVoters = db.voters;
     const nextLogs = addAuditLog(db.auditLogs, activeAdmin.fullName, activeAdmin.role, action, detail);
     const saved = commitDb({ ...db, voters: nextVoters, auditLogs: nextLogs });
+    if (user && autoSyncEnabled && !quotaExceeded) {
+      setCloudSummary((prev) =>
+        prev && saved.voters.length >= (prev.totalDpt || 0)
+          ? buildOptimisticCloudSummary(saved, user.uid)
+          : prev
+      );
+    }
     void apiUpdateVoters(nextVoters, activeAdmin.fullName, activeAdmin.role, action, detail);
 
     if (!user || !autoSyncEnabled || quotaExceeded) return;
@@ -1309,7 +1268,13 @@ function AppContent() {
     try {
       const { nextState } = applyVoterEditInState(db, voterId, payload, activeAdmin);
       const saved = commitDb(nextState);
+      setImmediateGasPushCounter((c) => c + 1);
       if (user && autoSyncEnabled && !quotaExceeded) {
+        setCloudSummary((prev) =>
+          prev && saved.voters.length >= (prev.totalDpt || 0)
+            ? buildOptimisticCloudSummary(saved, user.uid)
+            : prev
+        );
         lastSyncedTsRef.current = saved.lastUpdated;
         const editedVoter = saved.voters.find((v) => v.id === voterId);
         void (async () => {
@@ -1407,6 +1372,12 @@ function AppContent() {
     setPendingOfflineVotes([]);
     const nextState = resetElectionData(db, activeAdmin);
     const saved = commitDb(nextState);
+    setImmediateGasPushCounter((c) => c + 1);
+    if (user && autoSyncEnabled && !quotaExceeded) {
+      setCloudSummary(buildOptimisticCloudSummary(saved, user.uid));
+    } else {
+      setCloudSummary(null);
+    }
     void apiResetElection(activeAdmin);
 
     if (user && autoSyncEnabled && !quotaExceeded) {
@@ -1449,15 +1420,36 @@ function AppContent() {
       lastPulledTsRef.current = normalized.lastUpdated;
       lastSyncedTsRef.current = normalized.lastUpdated;
       setDb(normalized);
+      if (user && autoSyncEnabled && !quotaExceededRef.current) {
+        setCloudSummary(buildOptimisticCloudSummary(normalized, user.uid));
+      }
       void apiRestoreDatabase(normalized);
     },
-    []
+    [user, autoSyncEnabled, setCloudSummary]
   );
 
   const handleRestoreFromCloud = (nextDb: DatabaseState) => {
     if (!activeAdmin) return;
     applyCloudRestore(nextDb, activeAdmin);
   };
+
+  const handleGasRemoteDb = useCallback(
+    (remoteDb: DatabaseState) => {
+      lastPulledTsRef.current = remoteDb.lastUpdated;
+      lastSyncedTsRef.current = remoteDb.lastUpdated;
+      setDb(remoteDb);
+      if (user && autoSyncEnabled && !quotaExceededRef.current) {
+        setCloudSummary(buildOptimisticCloudSummary(remoteDb, user.uid));
+      }
+      void probeServerBackend().then((expressAvailable) => {
+        if (expressAvailable) {
+          return apiRestoreDatabase(remoteDb, true);
+        }
+        return null;
+      });
+    },
+    [user, autoSyncEnabled, setCloudSummary]
+  );
 
   useEffect(() => {
     if (!showIntro) return;
@@ -1473,66 +1465,22 @@ function AppContent() {
     });
   }, []);
 
-  const startupStep =
-    !showIntro && authReady
-      ? resolveStartupSyncStep({
-          hasFirebaseConnection: Boolean(user),
-          gasWebAppUrl: gasConfigState.webAppUrl,
-          firebaseVerifiedInWizard,
-          dismissedForSession: startupDismissed,
-        })
-      : null;
-
-  const handleStartupConfirmFirebase = async () => {
-    const res = await signInWithGoogle(DEFAULT_SYNC_EMAIL);
-    setAutoSyncEnabled(true);
-    setFirebaseVerifiedInWizard(true);
-    setStartupDismissed(false);
-    try {
-      await clearQuotaLockAndEnableNetwork();
-    } catch {
-      // Ignore offline/network re-enable error during startup transition
-    }
-    notify(
-      'success',
-      'Google Sheets & Firebase Terhubung',
-      `Akun ${res.user.displayName || 'pengelola'} terverifikasi. Lanjutkan konfirmasi Google Apps Script.`
-    );
-  };
-
-  const handleStartupConfirmGas = async (url: string, skipPing = false) => {
-    const cleanUrl = url.trim();
-    let pingSchool = dbRef.current.settings.schoolName;
-    if (!skipPing) {
-      const info = await gasPing(cleanUrl);
-      if (info.schoolName) {
-        pingSchool = info.schoolName;
-      }
-    }
-    const nextGasConfig: GasConfig = {
-      webAppUrl: cleanUrl,
-      autoSync: true,
-      lastSyncedAt: skipPing ? null : Date.now(),
-    };
-    saveGasConfig(nextGasConfig);
-    setGasConfigState(nextGasConfig);
-    window.dispatchEvent(new CustomEvent('osis-gas-config-change', { detail: nextGasConfig }));
-    notify(
-      'success',
-      'Backend Apps Script Terhubung',
-      skipPing
-        ? 'URL Web App Google Apps Script berhasil disimpan dan sinkronisasi otomatis diaktifkan.'
-        : `Spreadsheet "${pingSchool}" terhubung ke Google Apps Script.`
-    );
-  };
-
-  const handleStartupDismiss = () => {
-    setStartupDismissed(true);
-  };
+  const effectiveSummaryOverride = resolveEffectiveSummaryOverride({
+    db,
+    cloudSummary,
+    autoSyncEnabled,
+    quotaExceeded,
+    pendingOfflineVotes,
+    seedTimestamp: SEED_TIMESTAMP,
+  });
 
   return (
     <>
-      <GasAutoSyncController db={db} />
+      <GasAutoSyncController
+        db={db}
+        immediatePushCounter={immediateGasPushCounter}
+        onRemoteDb={handleGasRemoteDb}
+      />
       {showIntro && (
         <SplashIntro
           schoolName={db.settings.schoolName}
@@ -1541,17 +1489,10 @@ function AppContent() {
         />
       )}
 
-      <StartupSyncModal
-        step={startupStep}
-        firebaseVerified={Boolean(user) || firebaseVerifiedInWizard}
-        onConfirmFirebase={handleStartupConfirmFirebase}
-        onConfirmGas={handleStartupConfirmGas}
-        onDismiss={handleStartupDismiss}
-      />
-
       {view === 'MONITOR' && (
         <LiveMonitor
           db={db}
+          summaryOverride={effectiveSummaryOverride}
           onToggleSecretMode={handleToggleSecretMode}
           onBack={handleBackFromMonitor}
         />
@@ -1571,6 +1512,7 @@ function AppContent() {
         <AdminPanel
           db={db}
           currentAdmin={activeAdmin}
+          summaryOverride={effectiveSummaryOverride}
           onUpdateVoters={handleUpdateVoters}
           onImportCsvVoters={handleImportCsvVoters}
           onEditVoter={handleEditVoter}
@@ -1604,6 +1546,7 @@ function AppContent() {
         <LoginPortal
           db={db}
           cloudSummary={cloudSummary}
+          summaryOverride={effectiveSummaryOverride}
           pendingOfflineVotes={pendingOfflineVotes}
           onCloudLookupVoter={user && !quotaExceeded ? handleCloudLookupVoter : undefined}
           onVoterLogin={handleVoterLogin}
@@ -1627,11 +1570,26 @@ function AppContent() {
   );
 }
 
-function GasAutoSyncController({ db }: { db: DatabaseState }) {
+function GasAutoSyncController({
+  db,
+  immediatePushCounter,
+  onRemoteDb,
+}: {
+  db: DatabaseState;
+  immediatePushCounter: number;
+  onRemoteDb: (remoteDb: DatabaseState) => void;
+}) {
   const [gasConfig, setGasConfig] = useState<GasConfig>(() => loadGasConfig());
   const dbRef = useRef(db);
   dbRef.current = db;
+  const gasConfigRef = useRef(gasConfig);
+  gasConfigRef.current = gasConfig;
+  const onRemoteDbRef = useRef(onRemoteDb);
+  onRemoteDbRef.current = onRemoteDb;
   const lastPushedRef = useRef<number>(0);
+  const gasSyncInFlightRef = useRef<boolean>(false);
+  const pushPendingRef = useRef<boolean>(false);
+  const lastImmediateCounterRef = useRef<number>(immediatePushCounter);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -1646,10 +1604,87 @@ function GasAutoSyncController({ db }: { db: DatabaseState }) {
     return () => window.removeEventListener('osis-gas-config-change', handler);
   }, []);
 
+  const syncWithGas = useCallback(async () => {
+    const cfg = gasConfigRef.current;
+    if (!cfg.autoSync || !isValidGasWebAppUrl(cfg.webAppUrl)) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (gasSyncInFlightRef.current || pushPendingRef.current) return;
+
+    gasSyncInFlightRef.current = true;
+    try {
+      const res = await gasPullState(cfg.webAppUrl);
+      if (!res?.ok || !res.db || pushPendingRef.current) return;
+
+      const remoteNormalized = normalizeDatabase(res.db);
+      const currentLocal = dbRef.current;
+      const action = resolveGasSyncAction({
+        localLastUpdated: currentLocal.lastUpdated,
+        remoteLastUpdated: remoteNormalized.lastUpdated,
+        seedTimestamp: SEED_TIMESTAMP,
+      });
+
+      if (action === 'PULL_REMOTE') {
+        const reconciled = reconcilePendingVotesIntoDb(
+          remoteNormalized,
+          loadPendingOfflineVotes()
+        );
+        const saved = saveDatabase(reconciled, true);
+        lastPushedRef.current = saved.lastUpdated;
+        onRemoteDbRef.current(saved);
+        saveGasConfig({ ...cfg, lastSyncedAt: Date.now() });
+      } else if (action === 'PUSH_LOCAL' && currentLocal.lastUpdated !== SEED_TIMESTAMP) {
+        await gasPushState(cfg.webAppUrl, currentLocal);
+        lastPushedRef.current = currentLocal.lastUpdated;
+        saveGasConfig({ ...cfg, lastSyncedAt: Date.now() });
+      }
+    } catch {
+      // Tolerate transient GAS/network errors cleanly in background
+    } finally {
+      gasSyncInFlightRef.current = false;
+    }
+  }, []);
+
+  // Automatic initial pull & periodic sync on startup + focus/online/visibility (works on Netlify too)
+  useEffect(() => {
+    if (!gasConfig.autoSync || !isValidGasWebAppUrl(gasConfig.webAppUrl)) return;
+
+    void syncWithGas();
+
+    const intervalId = window.setInterval(() => {
+      void syncWithGas();
+    }, 10000);
+
+    const handleResume = () => {
+      if (document.visibilityState === 'visible') {
+        void syncWithGas();
+      }
+    };
+    const handleFocusOrOnline = () => {
+      void syncWithGas();
+    };
+
+    window.addEventListener('online', handleFocusOrOnline);
+    window.addEventListener('focus', handleFocusOrOnline);
+    document.addEventListener('visibilitychange', handleResume);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('online', handleFocusOrOnline);
+      window.removeEventListener('focus', handleFocusOrOnline);
+      document.removeEventListener('visibilitychange', handleResume);
+    };
+  }, [gasConfig.autoSync, gasConfig.webAppUrl, syncWithGas]);
+
+  // Automatic push when local state changes (immediate on vote/reset/import, debounced otherwise)
   useEffect(() => {
     if (!gasConfig.autoSync || !isValidGasWebAppUrl(gasConfig.webAppUrl)) return;
     if (db.lastUpdated === SEED_TIMESTAMP || db.lastUpdated === lastPushedRef.current) return;
 
+    const isImmediate = immediatePushCounter !== lastImmediateCounterRef.current;
+    lastImmediateCounterRef.current = immediatePushCounter;
+    const delayMs = isImmediate ? 120 : 1200;
+
+    pushPendingRef.current = true;
     const timer = window.setTimeout(async () => {
       try {
         await gasPushState(gasConfig.webAppUrl, dbRef.current);
@@ -1657,11 +1692,16 @@ function GasAutoSyncController({ db }: { db: DatabaseState }) {
         saveGasConfig({ ...gasConfig, lastSyncedAt: Date.now() });
       } catch (err) {
         console.error('GAS auto-sync error:', err);
+      } finally {
+        pushPendingRef.current = false;
       }
-    }, 1500);
+    }, delayMs);
 
-    return () => window.clearTimeout(timer);
-  }, [db.lastUpdated, gasConfig]);
+    return () => {
+      pushPendingRef.current = false;
+      window.clearTimeout(timer);
+    };
+  }, [db.lastUpdated, immediatePushCounter, gasConfig]);
 
   return null;
 }

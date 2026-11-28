@@ -188,11 +188,18 @@ function broadcastState(eventName: 'init' | 'state' = 'state'): void {
   }
 }
 
-function commitServerDb(nextState: DatabaseState): DatabaseState {
+function commitServerDb(
+  nextState: DatabaseState,
+  preservedLastUpdated?: number
+): DatabaseState {
   serverVersion = Math.max(Date.now(), serverVersion + 1);
+  const resolvedLastUpdated =
+    typeof preservedLastUpdated === 'number' && preservedLastUpdated > 0
+      ? preservedLastUpdated
+      : serverVersion;
   serverDb = normalizeState({
     ...nextState,
-    lastUpdated: serverVersion,
+    lastUpdated: resolvedLastUpdated,
   });
   persistDb(serverDb);
   broadcastState('state');
@@ -400,14 +407,20 @@ async function startServer(): Promise<void> {
   });
 
   app.post('/api/admin/restore', (req, res) => {
-    const { db: incomingDb } = req.body as {
+    const { db: incomingDb, preserveTimestamp } = req.body as {
       db?: Partial<DatabaseState>;
+      preserveTimestamp?: boolean;
     };
     if (!incomingDb || !Array.isArray(incomingDb.voters) || !Array.isArray(incomingDb.candidates)) {
       res.status(400).json({ ok: false, error: 'Snapshot database tidak valid.' });
       return;
     }
-    const saved = commitServerDb(normalizeState(incomingDb));
+    const normalized = normalizeState(incomingDb);
+    const preservedTs =
+      preserveTimestamp && typeof normalized.lastUpdated === 'number' && normalized.lastUpdated > 0
+        ? normalized.lastUpdated
+        : undefined;
+    const saved = commitServerDb(normalized, preservedTs);
     res.json({ ok: true, db: saved, version: serverVersion });
   });
 

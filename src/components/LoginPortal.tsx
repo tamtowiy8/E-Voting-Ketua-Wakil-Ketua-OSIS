@@ -15,22 +15,27 @@ import {
   UserCheck,
   Vote,
 } from 'lucide-react';
+import { SEED_TIMESTAMP } from '../data/seedData';
 import type { CloudElectionSummary } from '../services/firebaseClient';
 import type { DatabaseState, Voter } from '../types/evoting';
 import {
+  computeStatistics,
   isWithinSchedule,
   parseVoterQrPayload,
   resolveEffectiveVoterLoginMode,
   validateVoterLogin,
   validateVoterQrLogin,
+  type SummaryStatsOverride,
 } from '../utils/electionLogic';
 import { hasVoterPendingOfflineVote, type PendingOfflineVote } from '../utils/offlineVoteQueue';
+import { resolveEffectiveSummaryOverride } from '../utils/syncArbitration';
 import { useFullscreen } from '../utils/useFullscreen';
 import { VoterQrScanner } from './VoterQrScanner';
 
 interface LoginPortalProps {
   db: DatabaseState;
   cloudSummary?: CloudElectionSummary | null;
+  summaryOverride?: SummaryStatsOverride | null;
   pendingOfflineVotes?: PendingOfflineVote[];
   onCloudLookupVoter?: (
     nisInput: string
@@ -44,6 +49,7 @@ interface LoginPortalProps {
 export function LoginPortal({
   db,
   cloudSummary,
+  summaryOverride,
   pendingOfflineVotes = [],
   onCloudLookupVoter,
   onVoterLogin,
@@ -187,12 +193,20 @@ export function LoginPortal({
     void verifySingleVoterAndLogin(rawPayload, true);
   };
 
-  const pendingFirestoreCount = pendingOfflineVotes.filter((item) => !item.syncedFirestore).length;
-  const totalDptDisplay = cloudSummary?.totalDpt ?? db.voters.length;
-  const localVotedCount = db.voters.filter((v) => v.hasVoted).length;
-  const totalVoted = cloudSummary
-    ? Math.max(cloudSummary.totalVoted + pendingFirestoreCount, localVotedCount)
-    : localVotedCount;
+  const resolvedSummary =
+    summaryOverride !== undefined
+      ? summaryOverride
+      : resolveEffectiveSummaryOverride({
+          db,
+          cloudSummary,
+          autoSyncEnabled: true,
+          quotaExceeded: false,
+          pendingOfflineVotes,
+          seedTimestamp: SEED_TIMESTAMP,
+        });
+  const stats = computeStatistics(db.voters, db.candidates, resolvedSummary);
+  const totalDptDisplay = stats.totalDpt;
+  const totalVoted = stats.totalVoted;
 
   return (
     <div className="h-screen overflow-hidden flex flex-col bg-[var(--app-bg)] text-slate-900">
@@ -329,6 +343,7 @@ export function LoginPortal({
                 <p
                   className="mt-1 text-xl font-bold font-mono tabular-nums"
                   style={{ color: 'var(--app-accent)' }}
+                  data-testid="login-total-voted"
                 >
                   {totalVoted} Suara
                 </p>

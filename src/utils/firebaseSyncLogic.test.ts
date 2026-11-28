@@ -418,3 +418,18 @@ test('formatFirebaseAuthError gives actionable Netlify domain & popup guidance i
   );
 });
 
+test('buildSummaryCounters reconciles totalVoted to be at least totalValidVotes when voters lack hasVoted flags', async () => {
+  const { buildSummaryCounters } = await import('./firebaseSyncLogic');
+  const unflagged = SEED_DATABASE.voters.map((v) => ({ ...v, hasVoted: false }));
+  const candidatesWithVotes = SEED_DATABASE.candidates.map((c, idx) => ({
+    ...c,
+    votes: idx === 0 ? 10 : idx === 1 ? 25 : 15,
+  }));
+
+  const counters = buildSummaryCounters(unflagged, candidatesWithVotes);
+  assert.equal(counters.totalValidVotes, 50);
+  assert.equal(counters.totalVoted, 50);
+  assert.equal(counters.totalDpt, unflagged.length);
+});
+
+

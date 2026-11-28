@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  loadGasConfig,
+  normalizeGasConfig,
   parseGasResponseText,
   shouldFallbackFromProxyResponse,
 } from './gasClient';
+import { DEFAULT_GAS_WEB_APP_URL } from './startupSyncConfig';
 
 test('shouldFallbackFromProxyResponse falls back on 404/405 or HTML SPA responses, not JSON API errors', () => {
   assert.equal(shouldFallbackFromProxyResponse(404, 'text/html'), true);
@@ -98,5 +101,24 @@ test('parseGasResponseText handles BOM, lowercase doctype, /dev URL, and specifi
     () => parseGasResponseText('<!DOCTYPE html><html><body>Bad Gateway</body></html>', 502),
     (err: Error) => /HTTP 502/.test(err.message) && !err.message.includes('Unexpected token')
   );
+});
+
+test('loadGasConfig and normalizeGasConfig default to DEFAULT_GAS_WEB_APP_URL with autoSync enabled unless explicitly paused', () => {
+  const initial = loadGasConfig();
+  assert.equal(initial.webAppUrl, DEFAULT_GAS_WEB_APP_URL);
+  assert.equal(initial.autoSync, true);
+
+  const legacyEmpty = normalizeGasConfig({ webAppUrl: '', autoSync: false, lastSyncedAt: null });
+  assert.equal(legacyEmpty.webAppUrl, DEFAULT_GAS_WEB_APP_URL);
+  assert.equal(legacyEmpty.autoSync, true);
+
+  const explicitlyPaused = normalizeGasConfig({
+    webAppUrl: DEFAULT_GAS_WEB_APP_URL,
+    autoSync: false,
+    lastSyncedAt: 12345,
+    userDisabledAutoSync: true,
+  });
+  assert.equal(explicitlyPaused.webAppUrl, DEFAULT_GAS_WEB_APP_URL);
+  assert.equal(explicitlyPaused.autoSync, false);
 });
 

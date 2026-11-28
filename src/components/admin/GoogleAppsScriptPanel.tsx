@@ -156,7 +156,11 @@ export function GoogleAppsScriptPanel({
       return;
     }
     const nextAuto = !config.autoSync;
-    updateSavedConfig({ webAppUrl: cleanUrl, autoSync: nextAuto });
+    updateSavedConfig({
+      webAppUrl: cleanUrl,
+      autoSync: nextAuto,
+      userDisabledAutoSync: !nextAuto,
+    });
     onNotify(
       'info',
       nextAuto ? 'Auto-Sync Apps Script Aktif' : 'Auto-Sync Apps Script Dijeda',

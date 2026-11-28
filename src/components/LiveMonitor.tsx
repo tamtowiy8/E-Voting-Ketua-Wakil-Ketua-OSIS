@@ -12,8 +12,10 @@ import {
   Vote,
 } from 'lucide-react';
 import { useFirebaseAuth } from '../context/FirebaseContext';
+import { SEED_TIMESTAMP } from '../data/seedData';
 import type { DatabaseState } from '../types/evoting';
-import { computeStatistics } from '../utils/electionLogic';
+import { computeStatistics, type SummaryStatsOverride } from '../utils/electionLogic';
+import { resolveEffectiveSummaryOverride } from '../utils/syncArbitration';
 import {
   loadMonitorSoundEnabled,
   playIncomingVoteCoinSound,
@@ -25,22 +27,33 @@ import { CandidateImage } from './CandidateImage';
 
 interface LiveMonitorProps {
   db: DatabaseState;
+  summaryOverride?: SummaryStatsOverride | null;
   onToggleSecretMode: () => void;
   onBack: () => void;
 }
 
 const CHART_COLORS = ['#059669', '#D97706', '#1E3A5F', '#0284C7', '#7C3AED', '#DC2626'];
 
-export function LiveMonitor({ db, onToggleSecretMode, onBack }: LiveMonitorProps) {
+export function LiveMonitor({ db, summaryOverride, onToggleSecretMode, onBack }: LiveMonitorProps) {
   const { isFullscreen, toggleFullscreen } = useFullscreen();
-  const { cloudSummary } = useFirebaseAuth();
+  const { cloudSummary, autoSyncEnabled, quotaExceeded } = useFirebaseAuth();
   const [hoveredCandidateId, setHoveredCandidateId] = useState<string | null>(null);
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => loadMonitorSoundEnabled());
   const [nowText, setNowText] = useState(() =>
     new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   );
 
-  const stats = computeStatistics(db.voters, db.candidates, cloudSummary);
+  const effectiveSummary =
+    summaryOverride !== undefined
+      ? summaryOverride
+      : resolveEffectiveSummaryOverride({
+          db,
+          cloudSummary,
+          autoSyncEnabled,
+          quotaExceeded,
+          seedTimestamp: SEED_TIMESTAMP,
+        });
+  const stats = computeStatistics(db.voters, db.candidates, effectiveSummary);
   const isSecret = db.settings.hideLiveResults;
   const maxVotes = Math.max(1, ...stats.candidateStats.map((c) => c.votes));
   const prevTotalVotedRef = useRef<number | null>(null);

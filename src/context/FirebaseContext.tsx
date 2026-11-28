@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import type { User } from 'firebase/auth';
 import {
   googleSignIn,
@@ -44,7 +44,7 @@ interface FirebaseContextValue {
   quotaExceeded: boolean;
   setQuotaExceeded: (exceeded: boolean) => void;
   cloudSummary: CloudElectionSummary | null;
-  setCloudSummary: (summary: CloudElectionSummary | null) => void;
+  setCloudSummary: Dispatch<SetStateAction<CloudElectionSummary | null>>;
   clearQuotaLockAndEnableNetwork: () => Promise<void>;
   signInWithGoogle: (loginHint?: string) => Promise<{ user: User; accessToken: string }>;
   signOutGoogle: () => Promise<void>;

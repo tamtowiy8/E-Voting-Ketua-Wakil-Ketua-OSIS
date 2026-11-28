@@ -5,6 +5,7 @@ import {
   compareStudentVotersByClass,
   computeStatistics,
   isAdditionalVoter,
+  type SummaryStatsOverride,
 } from './electionLogic';
 
 export interface PdfLogoImage {
@@ -138,9 +139,10 @@ export async function loadPdfLogoImage(
 export function buildElectionPdfDocument(
   db: DatabaseState,
   exportedBy: string,
-  logoImage: PdfLogoImage | null = null
+  logoImage: PdfLogoImage | null = null,
+  summaryOverride: SummaryStatsOverride | null = null
 ): jsPDF {
-  const stats = computeStatistics(db.voters, db.candidates);
+  const stats = computeStatistics(db.voters, db.candidates, summaryOverride);
   const { studentVoters, additionalVoters } = partitionSortedReportVoters(db.voters);
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -558,10 +560,11 @@ export function buildElectionPdfDocument(
 
 export async function downloadElectionResultPdf(
   db: DatabaseState,
-  exportedBy: string
+  exportedBy: string,
+  summaryOverride: SummaryStatsOverride | null = null
 ): Promise<string> {
   const logoImage = await loadPdfLogoImage(db.settings.logoUrl);
-  const doc = buildElectionPdfDocument(db, exportedBy, logoImage);
+  const doc = buildElectionPdfDocument(db, exportedBy, logoImage, summaryOverride);
 
   const safeSlug = db.settings.schoolName
     .toLowerCase()

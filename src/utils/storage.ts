@@ -1,4 +1,4 @@
-import { SEED_DATABASE } from '../data/seedData';
+import { SEED_DATABASE, SEED_TIMESTAMP } from '../data/seedData';
 import type {
   AdminRole,
   AdminUser,
@@ -13,6 +13,7 @@ import {
   loadPendingOfflineVotes,
   reconcilePendingVotesIntoDb,
 } from './offlineVoteQueue';
+import { shouldAcceptServerState } from './syncArbitration';
 
 export const STORAGE_KEY = 'osis_evoting_db_v2';
 export const SAME_TAB_EVENT = 'osis-evoting-storage-update';
@@ -119,11 +120,14 @@ export function loadDatabase(): DatabaseState {
   }
 }
 
+let latestLocalSavedTs = 0;
+
 export function saveDatabase(nextState: DatabaseState, preserveTimestamp = false): DatabaseState {
   const stamped: DatabaseState = {
     ...normalizeDatabase(nextState),
     lastUpdated: preserveTimestamp && nextState.lastUpdated ? nextState.lastUpdated : Date.now(),
   };
+  latestLocalSavedTs = stamped.lastUpdated;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(stamped));
     window.dispatchEvent(new CustomEvent(SAME_TAB_EVENT, { detail: stamped }));
@@ -245,6 +249,8 @@ export async function probeServerBackend(): Promise<boolean> {
   return probeBackendPromise;
 }
 
+let localMutationInFlightCount = 0;
+
 export function initServerSync(onRemoteDb: (nextDb: DatabaseState) => void): () => void {
   let active = true;
   let lastVersion = 0;
@@ -255,10 +261,19 @@ export function initServerSync(onRemoteDb: (nextDb: DatabaseState) => void): () 
 
   const applyServerPayload = (rawDb: Partial<DatabaseState> | undefined, version?: number) => {
     if (!active || !rawDb) return;
+    const currentLocalTs = latestLocalSavedTs || loadDatabase().lastUpdated;
+    const acceptable = shouldAcceptServerState({
+      localLastUpdated: currentLocalTs,
+      incomingLastUpdated: rawDb.lastUpdated,
+      incomingVersion: version,
+      lastAppliedVersion: lastVersion,
+      seedTimestamp: SEED_TIMESTAMP,
+      localMutationInFlight: localMutationInFlightCount > 0,
+    });
+    if (!acceptable) {
+      return;
+    }
     if (typeof version === 'number' && version > 0) {
-      if (version <= lastVersion && lastVersion > 0) {
-        return;
-      }
       lastVersion = version;
     } else if (typeof rawDb.lastUpdated === 'number' && rawDb.lastUpdated === lastAppliedTs) {
       return;
@@ -350,6 +365,9 @@ async function postJson<T>(
   if (serverBackendStatus === 'static') {
     return null;
   }
+  if (syncLocalOnSuccess) {
+    localMutationInFlightCount += 1;
+  }
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -384,6 +402,10 @@ async function postJson<T>(
     return data;
   } catch {
     return null;
+  } finally {
+    if (syncLocalOnSuccess) {
+      localMutationInFlightCount = Math.max(0, localMutationInFlightCount - 1);
+    }
   }
 }
 
@@ -483,9 +505,14 @@ export async function apiUpdateSettings(
 }
 
 export async function apiRestoreDatabase(
-  dbState: DatabaseState
+  dbState: DatabaseState,
+  preserveTimestamp = false
 ): Promise<{ ok: boolean; db?: DatabaseState } | null> {
-  return postJson('/api/admin/restore', { db: dbState });
+  return postJson(
+    '/api/admin/restore',
+    { db: dbState, preserveTimestamp },
+    !preserveTimestamp
+  );
 }
 
 export async function apiLogAdminLogin(
@@ -493,7 +520,7 @@ export async function apiLogAdminLogin(
   actorRole: AdminRole,
   detail: string
 ): Promise<{ ok: boolean; db?: DatabaseState } | null> {
-  return postJson('/api/admin/login-log', { actorName, actorRole, detail });
+  return postJson('/api/admin/login-log', { actorName, actorRole, detail }, false);
 }
 
 export async function apiAdminQrLogin(

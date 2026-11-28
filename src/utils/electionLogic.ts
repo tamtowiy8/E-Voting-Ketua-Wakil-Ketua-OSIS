@@ -534,13 +534,6 @@ export function computeStatistics(
       Number.isFinite(summaryOverride.totalDpt)
   );
 
-  const totalDpt = useSummary ? Math.max(0, Math.round(summaryOverride!.totalDpt)) : voters.length;
-  const totalVoted = useSummary
-    ? Math.max(0, Math.round(summaryOverride!.totalVoted || 0))
-    : voters.filter((v) => v.hasVoted).length;
-  const totalNotVoted = computeNotVotedCount(totalDpt, totalVoted);
-  const participationRate = totalDpt > 0 ? Number(((totalVoted / totalDpt) * 100).toFixed(1)) : 0;
-
   const sortedCandidates = [...candidates].sort((a, b) => a.nomorUrut - b.nomorUrut);
   const candidateVotesMap = summaryOverride?.candidateVotes;
   const hasCandidateMap =
@@ -548,7 +541,9 @@ export function computeStatistics(
 
   const effectiveCandidateVotes = sortedCandidates.map((c) => {
     const mapped = hasCandidateMap ? candidateVotesMap?.[c.id] : undefined;
-    return typeof mapped === 'number' && Number.isFinite(mapped) ? Math.max(0, Math.round(mapped)) : c.votes;
+    return typeof mapped === 'number' && Number.isFinite(mapped)
+      ? Math.max(0, Math.round(mapped))
+      : Math.max(0, Math.round(Number(c.votes) || 0));
   });
 
   const computedSumValidVotes = effectiveCandidateVotes.reduce((sum, v) => sum + v, 0);
@@ -556,8 +551,19 @@ export function computeStatistics(
     useSummary &&
     typeof summaryOverride?.totalValidVotes === 'number' &&
     Number.isFinite(summaryOverride.totalValidVotes)
-      ? Math.max(0, Math.round(summaryOverride.totalValidVotes))
+      ? Math.max(0, Math.round(summaryOverride.totalValidVotes), computedSumValidVotes)
       : computedSumValidVotes;
+
+  const rawTotalVoted = useSummary
+    ? Math.max(0, Math.round(summaryOverride!.totalVoted || 0))
+    : voters.filter((v) => v.hasVoted).length;
+  const totalVoted = Math.max(rawTotalVoted, totalValidVotes);
+
+  const rawTotalDpt = useSummary ? Math.max(0, Math.round(summaryOverride!.totalDpt)) : voters.length;
+  const totalDpt = Math.max(rawTotalDpt, totalVoted);
+  const totalNotVoted = computeNotVotedCount(totalDpt, totalVoted);
+  const participationRate =
+    totalDpt > 0 ? Number(Math.min(100, (totalVoted / totalDpt) * 100).toFixed(1)) : 0;
 
   const candidateStats: CandidateStat[] = sortedCandidates.map((c, idx) => {
     const votes = effectiveCandidateVotes[idx];

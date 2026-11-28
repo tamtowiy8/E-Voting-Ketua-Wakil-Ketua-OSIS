@@ -51,7 +51,10 @@ export function buildSummaryCounters(
 
   const gradeTotals: Record<GradeSummaryBucket, number> = { X: 0, XI: 0, XII: 0, DPTB: 0 };
   const gradeVoted: Record<GradeSummaryBucket, number> = { X: 0, XI: 0, XII: 0, DPTB: 0 };
-  let totalVoted = 0;
+  const totalVoted = Math.max(
+    voters.reduce((acc, v) => acc + (v.hasVoted ? 1 : 0), 0),
+    totalValidVotes
+  );
 
   for (const v of voters) {
     const bucket: GradeSummaryBucket = isAdditionalVoter(v)
@@ -63,13 +66,12 @@ export function buildSummaryCounters(
           : 'X';
     gradeTotals[bucket] += 1;
     if (v.hasVoted) {
-      totalVoted += 1;
       gradeVoted[bucket] += 1;
     }
   }
 
   return {
-    totalDpt: voters.length,
+    totalDpt: Math.max(voters.length, totalVoted),
     totalVoted,
     totalValidVotes,
     candidateVotes,
@@ -485,9 +487,9 @@ export function estimateFirestoreStorageUsage(params: {
     typeof totalDptOverride === 'number' && Number.isFinite(totalDptOverride) && totalDptOverride > db.voters.length
       ? Math.round(totalDptOverride)
       : db.voters.length;
-  const totalDpt = effectiveTotalDpt;
-  const totalVoted = db.voters.filter((v) => v.hasVoted).length;
   const totalValidVotes = db.candidates.reduce((sum, c) => sum + c.votes, 0);
+  const totalVoted = Math.max(db.voters.filter((v) => v.hasVoted).length, totalValidVotes);
+  const totalDpt = Math.max(effectiveTotalDpt, totalVoted);
   const logoRaw = (db.settings.logoUrl || '').trim();
   const boundedLogo = logoRaw.length > 250000 ? logoRaw.slice(0, 250000) : logoRaw;
 
